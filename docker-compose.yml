@@ -1,0 +1,11 @@
+services:
+  gallery:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin123}
+      - JWT_SECRET=${JWT_SECRET:-change-me-in-production}
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped

@@ -1,0 +1,110 @@
+@import "tailwindcss";
+
+:root,
+[data-theme="dark"] {
+  --bg: #0b0b0d;
+  --bg-elevated: #14161b;
+  --bg-subtle: rgba(255, 255, 255, 0.04);
+  --fg: #f3f4f6;
+  --fg-muted: #9da3ae;
+  --fg-subtle: #6d727d;
+  --border: rgba(255, 255, 255, 0.13);
+  color-scheme: dark;
+}
+
+[data-theme="light"] {
+  --bg: #f7f6f3;
+  --bg-elevated: #ffffff;
+  --bg-subtle: rgba(0, 0, 0, 0.035);
+  --fg: #151619;
+  --fg-muted: #5a5f69;
+  --fg-subtle: #8b909a;
+  --border: rgba(0, 0, 0, 0.11);
+  color-scheme: light;
+}
+
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+  html {
+    font-size: 16px;
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
+    font-variant-numeric: tabular-nums;
+    background-color: var(--bg);
+    color: var(--fg);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  @media (min-width: 1024px) {
+    html {
+      font-size: 16.8px;
+    }
+  }
+  body {
+    background-color: var(--bg);
+    color: var(--fg);
+  }
+}
+
+.font-editorial,
+.font-mono-tech {
+  font-family: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+@keyframes lightboxIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes photoFadeIn {
+  from {
+    opacity: 0.35;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes heroBreath {
+  from {
+    transform: scale(1.035);
+  }
+  to {
+    transform: scale(1);
+  }
+}
+
+.animate-lightbox-in {
+  animation: lightboxIn 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.animate-photo-switch {
+  animation: photoFadeIn 0.24s ease-out;
+}
+
+.animate-hero-breath {
+  animation: heroBreath 6s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-lightbox-in,
+  .animate-photo-switch,
+  .animate-hero-breath {
+    animation: none !important;
+    transition: none !important;
+  }
+}
