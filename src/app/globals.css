@@ -4,7 +4,7 @@
 [data-theme="dark"] {
   --bg: #0b0b0d;
   --bg-elevated: #14161b;
-  --bg-subtle: rgba(255, 255, 255, 0.04);
+  --bg-subtle: rgba(255, 255, 255, 0.045);
   --fg: #f3f4f6;
   --fg-muted: #9da3ae;
   --fg-subtle: #6d727d;
@@ -12,14 +12,15 @@
   color-scheme: dark;
 }
 
+/* Crisp snow-white gallery wall with soft cool-stone elevated surfaces */
 [data-theme="light"] {
-  --bg: #f7f6f3;
-  --bg-elevated: #ffffff;
-  --bg-subtle: rgba(0, 0, 0, 0.035);
-  --fg: #151619;
-  --fg-muted: #5a5f69;
-  --fg-subtle: #8b909a;
-  --border: rgba(0, 0, 0, 0.11);
+  --bg: #fcfcfd;
+  --bg-elevated: #f4f5f8;
+  --bg-subtle: rgba(15, 23, 42, 0.05);
+  --fg: #111827;
+  --fg-muted: #525866;
+  --fg-subtle: #858c99;
+  --border: rgba(15, 23, 42, 0.09);
   color-scheme: light;
 }
 
@@ -33,6 +34,7 @@
     font-variant-numeric: tabular-nums;
     background-color: var(--bg);
     color: var(--fg);
+    transition: background-color 0.25s ease, color 0.25s ease;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
@@ -44,6 +46,7 @@
   body {
     background-color: var(--bg);
     color: var(--fg);
+    transition: background-color 0.25s ease, color 0.25s ease;
   }
 }
 
@@ -94,6 +97,21 @@
 
 .animate-photo-switch {
   animation: photoFadeIn 0.24s ease-out;
+}
+
+@keyframes tabContentIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-tab-in {
+  animation: tabContentIn 0.24s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .animate-hero-breath {
