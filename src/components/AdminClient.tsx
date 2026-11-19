@@ -41,6 +41,7 @@ import {
   type MonographCoverBlock,
 } from "@/lib/monograph";
 import type { AboutFocusItem, AboutMilestoneItem } from "./AboutClient";
+import { extractExifFromBuffer } from "@/lib/exif";
 import { CameraIllustration, LensIllustration } from "./GearIllustrations";
 import { usePreferences } from "./PreferencesProvider";
 
@@ -66,7 +67,9 @@ const CATEGORIES = [
 
 const CAT_NAME: Record<string, string> = Object.fromEntries(CATEGORIES.map((c) => [c.id, c.label]));
 
-async function analyzeImageFile(file: File): Promise<{ width: number; height: number; ambient: string }> {
+async function analyzeImageFile(
+  file: File
+): Promise<{ width: number; height: number; ambient: string; blurData: string }> {
   return new Promise((resolve) => {
     const url = URL.createObjectURL(file);
     const img = new Image();
@@ -74,14 +77,18 @@ async function analyzeImageFile(file: File): Promise<{ width: number; height: nu
       const width = img.naturalWidth || 1600;
       const height = img.naturalHeight || 1068;
       let ambient = "#1e2024";
+      let blurData = "";
       try {
+        const scale = Math.min(1, 24 / Math.max(width, height));
+        const cw = Math.max(1, Math.round(width * scale));
+        const ch = Math.max(1, Math.round(height * scale));
         const c = document.createElement("canvas");
-        c.width = 16;
-        c.height = 16;
+        c.width = cw;
+        c.height = ch;
         const ctx = c.getContext("2d");
         if (ctx) {
-          ctx.drawImage(img, 0, 0, 16, 16);
-          const { data } = ctx.getImageData(0, 0, 16, 16);
+          ctx.drawImage(img, 0, 0, cw, ch);
+          const { data } = ctx.getImageData(0, 0, cw, ch);
           let r = 0, g = 0, b = 0, n = 0;
           for (let i = 0; i < data.length; i += 4) {
             r += data[i];
@@ -92,16 +99,17 @@ async function analyzeImageFile(file: File): Promise<{ width: number; height: nu
           ambient = `#${[r, g, b]
             .map((v) => Math.round((v / n) * 0.28).toString(16).padStart(2, "0"))
             .join("")}`;
+          blurData = c.toDataURL("image/webp", 0.5);
         }
       } catch {
         // ignore
       }
       URL.revokeObjectURL(url);
-      resolve({ width, height, ambient });
+      resolve({ width, height, ambient, blurData });
     };
     img.onerror = () => {
       URL.revokeObjectURL(url);
-      resolve({ width: 1600, height: 1068, ambient: "#1e2024" });
+      resolve({ width: 1600, height: 1068, ambient: "#1e2024", blurData: "" });
     };
     img.src = url;
   });
@@ -294,22 +302,77 @@ export function AdminClient({
         done += 1;
         setUploadProgress(`正在上传并解析 EXIF (${done}/${arr.length}) · ${file.name}`);
         const meta = await analyzeImageFile(file);
-        const fd = new FormData();
-        fd.append("file", file);
-        fd.append("width", String(meta.width));
-        fd.append("height", String(meta.height));
-        fd.append("ambient", meta.ambient);
-        fd.append("category", batchCategory);
-        fd.append("featured", String(batchFeatured));
-        if (Number(batchColId) > 0) fd.append("collectionId", batchColId);
-        await fetch("/api/admin/upload", { method: "POST", body: fd });
+
+        // When S3/R2 is active, try direct browser-to-R2 presigned PUT first (bypasses Vercel 4.5MB limit for 50MB+ photos!)
+        let uploadedViaPresign = false;
+        if (storageMode === "s3") {
+          try {
+            const preRes = await fetch("/api/admin/presign", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ filename: file.name, contentType: file.type || "image/jpeg" }),
+            });
+            if (preRes.ok) {
+              const { uploadUrl, publicUrl } = await preRes.json();
+              const putRes = await fetch(uploadUrl, {
+                method: "PUT",
+                headers: { "Content-Type": file.type || "image/jpeg" },
+                body: file,
+              });
+              if (putRes.ok) {
+                const ab = await file.arrayBuffer();
+                const exif = extractExifFromBuffer(ab);
+                const rawTitle = file.name.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " ").trim();
+                await fetch("/api/admin/photos", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    title: rawTitle || "未命名作品",
+                    url: publicUrl,
+                    width: exif.width || meta.width,
+                    height: exif.height || meta.height,
+                    ambient: meta.ambient,
+                    blurData: meta.blurData,
+                    category: batchCategory,
+                    featured: batchFeatured,
+                    takenAt: exif.takenAt,
+                    lat: exif.lat,
+                    lng: exif.lng,
+                    camera: exif.camera,
+                    lens: exif.lens,
+                    focalMm: exif.focalMm,
+                    aperture: exif.aperture,
+                    shutter: exif.shutter,
+                    iso: exif.iso,
+                    collectionIds: Number(batchColId) > 0 ? [Number(batchColId)] : [],
+                  }),
+                });
+                uploadedViaPresign = true;
+              }
+            }
+          } catch {
+            // Fall back to server multipart upload if R2 bucket CORS is not set yet
+          }
+        }
+
+        if (!uploadedViaPresign) {
+          const fd = new FormData();
+          fd.append("file", file);
+          fd.append("width", String(meta.width));
+          fd.append("height", String(meta.height));
+          fd.append("ambient", meta.ambient);
+          fd.append("category", batchCategory);
+          fd.append("featured", String(batchFeatured));
+          if (Number(batchColId) > 0) fd.append("collectionId", batchColId);
+          await fetch("/api/admin/upload", { method: "POST", body: fd });
+        }
       }
       setUploading(false);
       setUploadProgress("");
       notify(`已成功上传 ${arr.length} 幅作品`);
       router.refresh();
     },
-    [batchCategory, batchColId, batchFeatured, notify, router]
+    [batchCategory, batchColId, batchFeatured, notify, router, storageMode]
   );
 
   // Global window file drag-and-drop listener

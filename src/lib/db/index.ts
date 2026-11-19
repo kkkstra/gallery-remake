@@ -7,7 +7,9 @@ import * as schema from "./schema";
 import { INITIAL_COLLECTIONS, INITIAL_GEAR, INITIAL_PHOTOS, INITIAL_SETTINGS } from "./seed-data";
 import { generateBlurDataUrl, resolveLocalPhotoPath } from "../lqip";
 
-const dataDir = path.join(process.cwd(), "data");
+const dataDir = process.env.VERCEL
+  ? path.join("/tmp", "gallery-data")
+  : path.join(process.cwd(), "data");
 if (!process.env.DATABASE_URL && !fs.existsSync(dataDir)) {
   fs.mkdirSync(dataDir, { recursive: true });
 }

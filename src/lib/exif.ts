@@ -22,7 +22,7 @@ function cleanCameraName(make?: string, model?: string): string {
   return `${mk} ${m}`;
 }
 
-export function extractExifFromBuffer(buffer: Buffer): ExtractedExif {
+export function extractExifFromBuffer(buffer: Buffer | ArrayBuffer | Uint8Array): ExtractedExif {
   try {
     const tags = ExifReader.load(buffer, { expanded: true });
     const exif = (tags.exif || {}) as Record<string, { description?: string; value?: unknown }>;

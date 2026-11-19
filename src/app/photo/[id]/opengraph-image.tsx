@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import { ImageResponse } from "next/og";
 import sharp, { type OverlayOptions } from "sharp";
 import { getAllPhotos, getSiteSettings } from "@/lib/queries";
 import { resolveLocalPhotoPath } from "@/lib/lqip";
@@ -13,6 +15,27 @@ function escXml(str: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&apos;");
+}
+
+async function fetchGoogleFontSubset(text: string): Promise<ArrayBuffer | null> {
+  try {
+    const uniqueChars = Array.from(new Set(text)).join("");
+    const cssUrl = `https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@600&text=${encodeURIComponent(uniqueChars)}`;
+    const cssRes = await fetch(cssUrl, {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      },
+    });
+    const css = await cssRes.text();
+    const match = css.match(/src:\s*url\(([^)]+)\)\s*format\(['"](?:woff2|truetype|opentype)['"]\)/) ||
+      css.match(/url\((https:\/\/fonts\.gstatic\.com\/[^)]+)\)/);
+    if (!match?.[1]) return null;
+    const fontRes = await fetch(match[1]);
+    return fontRes.ok ? await fontRes.arrayBuffer() : null;
+  } catch {
+    return null;
+  }
 }
 
 export default async function OpenGraphImage({
@@ -46,6 +69,104 @@ export default async function OpenGraphImage({
     .filter(Boolean)
     .join("  ");
 
+  // On Vercel Serverless (where OS CJK fonts are absent), render via `next/og` ImageResponse + dynamic 4KB Noto Sans SC subset
+  if (process.env.VERCEL) {
+    let imgSrc = photo?.url || "";
+    if (photo && !imgSrc.startsWith("http")) {
+      const localPath = resolveLocalPhotoPath(photo.url);
+      if (localPath && fs.existsSync(localPath)) {
+        const resized = await sharp(localPath).rotate().resize(760, 540, { fit: "inside" }).jpeg({ quality: 82 }).toBuffer();
+        imgSrc = `data:image/jpeg;base64,${resized.toString("base64")}`;
+      }
+    }
+
+    const allText = `${author}${title}${subtitle}${place}${gear}${specs}`;
+    const fontData = await fetchGoogleFontSubset(allText);
+
+    return new ImageResponse(
+      (
+        <div
+          style={{
+            width: "100%",
+            height: "100%",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            backgroundColor: "#0b0d12",
+            color: "#F4F5F7",
+            padding: "52px 58px",
+            fontFamily: fontData ? "NotoSansSC" : "sans-serif",
+          }}
+        >
+          <div
+            style={{
+              width: "660px",
+              height: "526px",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            {imgSrc ? (
+              <img
+                src={imgSrc}
+                alt=""
+                style={{ maxWidth: "660px", maxHeight: "526px", objectFit: "contain" }}
+              />
+            ) : null}
+          </div>
+
+          <div
+            style={{
+              width: "380px",
+              height: "480px",
+              display: "flex",
+              flexDirection: "column",
+              justifyContent: "center",
+              borderLeft: "1px solid rgba(255,255,255,0.14)",
+              paddingLeft: "36px",
+            }}
+          >
+            <div style={{ fontSize: 15, color: "rgba(255,255,255,0.52)", letterSpacing: "2px", marginBottom: 42 }}>
+              {author.toUpperCase()}
+            </div>
+            <div style={{ fontSize: 36, fontWeight: 600, lineHeight: 1.25 }}>{title}</div>
+            {subtitle ? (
+              <div style={{ fontSize: 19, color: "rgba(255,255,255,0.64)", marginTop: 8 }}>{subtitle}</div>
+            ) : null}
+            {place ? (
+              <div style={{ fontSize: 17, color: "rgba(255,255,255,0.72)", marginTop: 28 }}>{place}</div>
+            ) : null}
+            {gear ? (
+              <div style={{ display: "flex", alignItems: "center", marginTop: 52 }}>
+                <div
+                  style={{
+                    width: 10,
+                    height: 10,
+                    borderRadius: 999,
+                    backgroundColor: "#E20613",
+                    marginRight: 10,
+                  }}
+                />
+                <span style={{ fontSize: 20, fontWeight: 600 }}>{gear}</span>
+              </div>
+            ) : null}
+            {specs ? (
+              <div style={{ fontSize: 16, color: "rgba(255,255,255,0.62)", marginTop: 8 }}>{specs}</div>
+            ) : null}
+          </div>
+        </div>
+      ),
+      {
+        ...size,
+        fonts: fontData
+          ? [{ name: "NotoSansSC", data: fontData, style: "normal", weight: 600 }]
+          : undefined,
+      }
+    );
+  }
+
+  // Local / VPS Node runtime with native sharp + system CJK fonts
   const composites: OverlayOptions[] = [];
 
   if (photo) {
@@ -60,7 +181,6 @@ export default async function OpenGraphImage({
       }
 
       if (sourceBuf) {
-        // Soft blurred darkroom ambient backdrop on left + crisp framed artwork
         const bgBlur = await sharp(sourceBuf)
           .resize(W, H, { fit: "cover" })
           .blur(42)
