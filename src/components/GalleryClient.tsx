@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   Aperture,
@@ -20,7 +20,9 @@ import {
 } from "lucide-react";
 import type { Photo } from "@/lib/db/schema";
 import { SiteHeader } from "./SiteHeader";
+import { SiteFooter } from "./SiteFooter";
 import { Lightbox } from "./Lightbox";
+import { GalleryImage } from "./GalleryImage";
 import { usePreferences } from "./PreferencesProvider";
 import { CameraIllustration, LensIllustration } from "./GearIllustrations";
 
@@ -251,13 +253,132 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
   }, [camera, category, gearTab, photos]);
 
   const filtered = useMemo(() => {
-    return photos.filter((p) => {
-      if (category !== "all" && p.category !== category) return false;
-      if (camera !== "all" && p.camera !== camera) return false;
-      if (lens !== "all" && p.lens !== lens) return false;
-      return true;
-    });
+    return photos
+      .filter((p) => {
+        if (category !== "all" && p.category !== category) return false;
+        if (camera !== "all" && p.camera !== camera) return false;
+        if (lens !== "all" && p.lens !== lens) return false;
+        return true;
+      })
+      .sort((a, b) => (b.takenAt || "").localeCompare(a.takenAt || "") || a.sortOrder - b.sortOrder);
   }, [camera, category, lens, photos]);
+
+  // Sync URL query params (e.g. when jumping from Global ⌘K Search)
+  useEffect(() => {
+    const qCat = searchParams.get("category") || "all";
+    const qCam = searchParams.get("camera") || "all";
+    const qLens = searchParams.get("lens") || "all";
+    const qPhotoId = Number(searchParams.get("photo") || 0);
+
+    if (qPhotoId) {
+      setCategoryState("all");
+      setCameraState("all");
+      setLensState("all");
+      const sortedAll = [...photos].sort(
+        (a, b) => (b.takenAt || "").localeCompare(a.takenAt || "") || a.sortOrder - b.sortOrder
+      );
+      const idx = sortedAll.findIndex((p) => p.id === qPhotoId);
+      if (idx >= 0) setLightboxIdx(idx);
+      router.replace("/gallery", { scroll: false });
+      return;
+    }
+
+    setCategoryState(qCat);
+    setCameraState(qCam);
+    setLensState(qLens);
+    if (qCam !== "all" || qLens !== "all") {
+      setGearOpen(true);
+      setGearTab(qLens !== "all" && qCam === "all" ? "lens" : "camera");
+    }
+  }, [photos, router, searchParams]);
+
+  // Build Year/Month Optical Timeline entries
+  const timelineEntries = useMemo(() => {
+    const list: { ym: string; year: string; month: string; count: number; firstPhotoId: number; isYearStart: boolean }[] = [];
+    const indexByYm = new Map<string, number>();
+    let prevYear = "";
+    for (const p of filtered) {
+      const ym = (p.takenAt || "").slice(0, 7);
+      if (!/^\d{4}-\d{2}$/.test(ym)) continue;
+      const existing = indexByYm.get(ym);
+      if (existing !== undefined) {
+        list[existing].count += 1;
+      } else {
+        const [year, month] = ym.split("-");
+        indexByYm.set(ym, list.length);
+        list.push({
+          ym,
+          year,
+          month,
+          count: 1,
+          firstPhotoId: p.id,
+          isYearStart: year !== prevYear,
+        });
+        prevYear = year;
+      }
+    }
+    return list;
+  }, [filtered]);
+
+  const [activeYm, setActiveYm] = useState<string>("");
+  const [hoverYm, setHoverYm] = useState<string | null>(null);
+  const [scrubbing, setScrubbing] = useState(false);
+  const rulerTrackRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (timelineEntries.length === 0) return;
+    let raf = 0;
+    const syncActiveMonth = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 48) {
+          setActiveYm(timelineEntries[timelineEntries.length - 1].ym);
+          return;
+        }
+        const anchorY = window.innerHeight * 0.3;
+        const nodes = galleryRef.current?.querySelectorAll<HTMLElement>("[data-ym]");
+        if (!nodes || nodes.length === 0) return;
+        let bestYm = timelineEntries[0].ym;
+        let bestDist = Infinity;
+        nodes.forEach((el) => {
+          const rect = el.getBoundingClientRect();
+          if (rect.height === 0) return;
+          const dist = Math.abs(rect.top + rect.height * 0.35 - anchorY);
+          if (dist < bestDist) {
+            bestDist = dist;
+            bestYm = el.dataset.ym || bestYm;
+          }
+        });
+        setActiveYm(bestYm);
+      });
+    };
+    syncActiveMonth();
+    window.addEventListener("scroll", syncActiveMonth, { passive: true });
+    window.addEventListener("resize", syncActiveMonth);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener("scroll", syncActiveMonth);
+      window.removeEventListener("resize", syncActiveMonth);
+    };
+  }, [timelineEntries, view]);
+
+  const scrollToYm = useCallback((ym: string, instant = false) => {
+    const entry = timelineEntries.find((e) => e.ym === ym);
+    if (!entry) return;
+    setActiveYm(ym);
+    const el = galleryRef.current?.querySelector<HTMLElement>(`[data-photo-id="${entry.firstPhotoId}"]`);
+    if (!el) return;
+    const top = Math.max(0, window.scrollY + el.getBoundingClientRect().top - 110);
+    window.scrollTo({ top, behavior: instant ? "auto" : "smooth" });
+  }, [timelineEntries]);
+
+  const pickYmAtClientY = useCallback((clientY: number) => {
+    const track = rulerTrackRef.current;
+    if (!track || timelineEntries.length === 0) return null;
+    const rect = track.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(0.999, (clientY - rect.top) / Math.max(1, rect.height)));
+    return timelineEntries[Math.floor(ratio * timelineEntries.length)]?.ym ?? null;
+  }, [timelineEntries]);
 
   const mosaicRows = useMemo(() => buildJustifiedRows(filtered), [filtered]);
 
@@ -272,16 +393,16 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
       .join(" + ") || (locale === "en" ? "Filter" : "筛选");
 
   return (
-    <div className="min-h-dvh pb-24">
+    <div className="min-h-dvh flex flex-col">
       <SiteHeader
         photographerName={settings.photographerName}
         photographerNameEn={settings.photographerNameEn}
       />
 
       {/* Toolbar & Collapsible Gear Filter */}
-      <div className="mx-auto max-w-[1440px] px-6 py-4 sm:px-9 border-b border-[var(--border)]">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div className="flex flex-wrap items-center gap-5 text-[15px]">
+      <div className="mx-auto w-full max-w-[1440px] px-4 py-3 sm:px-9 sm:py-4 border-b border-[var(--border)]">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-4 sm:gap-5 overflow-x-auto no-scrollbar whitespace-nowrap text-sm sm:text-[15px]">
             <button
               type="button"
               onClick={() => changeCategory("all")}
@@ -314,31 +435,31 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
             ))}
           </div>
 
-          <div className="flex items-center gap-2.5">
+          <div className="flex shrink-0 items-center gap-1.5 sm:gap-2.5">
             {hasActiveFilter && (
               <button
                 type="button"
                 onClick={resetFilters}
-                className="inline-flex items-center gap-1 rounded-md border border-[var(--border)] px-2.5 py-1.5 text-xs text-[var(--fg-muted)] hover:text-[var(--fg)] transition cursor-pointer"
+                className="inline-flex items-center gap-1 rounded-md border border-[var(--border)] px-2 sm:px-2.5 py-1.5 text-xs text-[var(--fg-muted)] hover:text-[var(--fg)] transition cursor-pointer"
               >
                 <X className="h-3.5 w-3.5" />
-                <span>{locale === "en" ? "Reset" : "重置"}</span>
+                <span className="hidden sm:inline">{locale === "en" ? "Reset" : "重置"}</span>
               </button>
             )}
 
             <button
               type="button"
               onClick={() => setGearOpen((v) => !v)}
-              className={`inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm transition cursor-pointer ${
+              className={`inline-flex items-center gap-1 sm:gap-1.5 rounded-md border px-2.5 sm:px-3 py-1.5 text-xs sm:text-sm transition cursor-pointer ${
                 camera !== "all" || lens !== "all"
                   ? "border-[var(--fg)] bg-[var(--fg)] text-[var(--bg)] font-medium"
                   : "border-[var(--border)] bg-[var(--bg-elevated)] text-[var(--fg)] hover:opacity-85"
               }`}
             >
-              <SlidersHorizontal className="h-3.5 w-3.5" />
-              <span>{filterButtonText}</span>
+              <SlidersHorizontal className="h-3.5 w-3.5 shrink-0" />
+              <span className="max-w-[108px] sm:max-w-none truncate">{filterButtonText}</span>
               <ChevronDown
-                className={`h-3.5 w-3.5 transition-transform duration-250 ${
+                className={`h-3.5 w-3.5 shrink-0 transition-transform duration-250 ${
                   gearOpen ? "rotate-180" : ""
                 }`}
               />
@@ -383,7 +504,7 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
           }`}
         >
           <div className="overflow-hidden">
-            <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] px-4 py-3 space-y-3">
+            <div className="surface-card rounded-lg px-4 py-3 space-y-3">
               {/* Dedicated Row 1: 相机 / 镜头 Switcher */}
               <div className="flex items-center gap-5 border-b border-[var(--border)] pb-2.5 text-sm">
                 <button
@@ -418,7 +539,7 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
               {/* Dedicated Row 2: Full-Width Options */}
               {gearTab === "camera" ? (
                 <div key="gear-camera" className="space-y-2.5 animate-tab-in">
-                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5">
+                  <div className="grid grid-cols-1 min-[420px]:grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 sm:gap-2.5">
                     {cameraStats.map((item) => {
                       const active = camera === item.name;
                       return (
@@ -486,7 +607,7 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
                   )}
                 </div>
               ) : (
-                <div key="gear-lens" className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5 animate-tab-in">
+                <div key="gear-lens" className="grid grid-cols-1 min-[420px]:grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 sm:gap-2.5 animate-tab-in">
                   {lensStats.map((item) => {
                     const active = lens === item.name;
                     return (
@@ -551,27 +672,30 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
                       <figure
                         key={photo.id}
                         data-photo-id={photo.id}
+                        data-ym={(photo.takenAt || "").slice(0, 7)}
                         onClick={() => setLightboxIdx(flatIdx)}
-                        style={{ flexGrow: ratio, flexBasis: "0%" }}
-                        className="group relative cursor-pointer overflow-hidden bg-[var(--bg-elevated)] will-change-transform"
+                        style={{ "--item-grow": ratio } as React.CSSProperties}
+                        className="group relative cursor-pointer will-change-transform hover:z-20 sm:[flex-basis:0%] sm:[flex-grow:var(--item-grow)]"
                       >
-                        <img
+                        <GalleryImage
+                          photoId={photo.id}
                           src={photo.url}
                           alt={title}
-                          style={{ aspectRatio: `${photo.width || 1600} / ${photo.height || 1068}` }}
-                          className="w-full h-full block object-cover transition duration-600 ease-out group-hover:scale-[1.03]"
+                          ambient={photo.ambient}
+                          aspectRatio={`${photo.width || 1600} / ${photo.height || 1068}`}
+                          className="w-full h-full"
                         />
-                        <figcaption className="pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-between gap-3 bg-gradient-to-t from-black/85 via-black/30 to-transparent px-4 py-3.5 text-sm text-zinc-100 opacity-0 translate-y-1 transition-all duration-300 group-hover:opacity-100 group-hover:translate-y-0">
+                        <figcaption className="glass-strip pointer-events-none absolute inset-x-0 bottom-0 flex items-center justify-between gap-3 px-3.5 py-2.5 text-sm text-zinc-100 opacity-0 translate-y-1 transition-all duration-300 group-hover:opacity-100 group-hover:translate-y-0">
                           <div className="min-w-0">
                             <div className="truncate font-medium">{title}</div>
                             {place && (
-                              <div className="inline-flex items-center gap-1 truncate text-xs text-zinc-300">
+                              <div className="inline-flex items-center gap-1 truncate text-xs text-zinc-200">
                                 <MapPin className="h-3 w-3 shrink-0" />
                                 <span className="truncate">{place.split(",")[0]}</span>
                               </div>
                             )}
                           </div>
-                          <span className="inline-flex items-center gap-1 shrink-0 text-xs text-zinc-300">
+                          <span className="inline-flex items-center gap-1 shrink-0 text-xs text-zinc-200">
                             <Aperture className="h-3 w-3" />
                             {[photo.focalMm ? `${photo.focalMm}mm` : "", photo.aperture].filter(Boolean).join(" ")}
                           </span>
@@ -592,8 +716,8 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
           </main>
         ) : (
           /* View 2: Dense Span-Aware Bento Index */
-          <main className="mx-auto max-w-[1440px] px-6 sm:px-9 pt-7">
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 sm:auto-rows-[305px] grid-flow-dense">
+          <main className="mx-auto max-w-[1440px] px-4 sm:px-9 pt-5 sm:pt-7">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5 sm:gap-6 sm:auto-rows-[305px] grid-flow-dense">
               {filtered.map((photo, flatIdx) => {
                 const isPortrait = (photo.height || 1068) > (photo.width || 1600) * 1.1;
                 const title = pick(photo.title, photo.titleEn);
@@ -603,18 +727,20 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
                   <figure
                     key={photo.id}
                     data-photo-id={photo.id}
+                    data-ym={(photo.takenAt || "").slice(0, 7)}
                     onClick={() => setLightboxIdx(flatIdx)}
-                    className={`group flex flex-col cursor-pointer will-change-transform ${
+                    className={`group relative flex flex-col cursor-pointer will-change-transform hover:z-20 ${
                       isPortrait ? "sm:row-span-2" : "sm:row-span-1"
                     }`}
                   >
-                    <div className="relative flex-1 min-h-[240px] sm:min-h-0 overflow-hidden bg-[var(--bg-elevated)]">
-                      <img
-                        src={photo.url}
-                        alt={title}
-                        className="h-full w-full block object-cover transition duration-600 ease-out group-hover:scale-[1.03]"
-                      />
-                    </div>
+                    <GalleryImage
+                      photoId={photo.id}
+                      src={photo.url}
+                      alt={title}
+                      ambient={photo.ambient}
+                      style={{ "--mobile-ar": `${photo.width || 1600} / ${photo.height || 1068}` } as React.CSSProperties}
+                      className="flex-1 [aspect-ratio:var(--mobile-ar)] sm:[aspect-ratio:auto] sm:min-h-0"
+                    />
                     <figcaption className="pt-2.5 shrink-0 flex items-center justify-between gap-3 text-sm">
                       <div className="flex items-center gap-2 min-w-0">
                         <span className="font-medium text-[var(--fg)] truncate">{title}</span>
@@ -638,10 +764,97 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
         )}
       </div>
 
+      {/* Right-Edge Minimal Optical Timeline Scale */}
+      {timelineEntries.length >= 2 && lightboxIdx === null && (
+        <aside
+          aria-label={locale === "en" ? "Timeline" : "拍摄时间刻度尺"}
+          className="fixed right-2 sm:right-3 top-1/2 -translate-y-1/2 z-20 hidden md:flex items-center gap-2 select-none"
+        >
+          {(hoverYm || scrubbing) && (() => {
+            const target = timelineEntries.find((e) => e.ym === (hoverYm || activeYm));
+            if (!target) return null;
+            return (
+              <div className="pointer-events-none rounded border border-[var(--border)] bg-[var(--header-bg)] backdrop-blur-xl px-2.5 py-1 text-xs font-medium text-[var(--fg)] whitespace-nowrap animate-tab-in">
+                <span>{target.year}.{target.month}</span>
+                <span className="ml-1.5 text-[11px] text-[var(--fg-muted)]">
+                  {locale === "en" ? `${target.count}` : `${target.count} 幅`}
+                </span>
+              </div>
+            );
+          })()}
+
+          <div
+            ref={rulerTrackRef}
+            onPointerDown={(e) => {
+              e.preventDefault();
+              e.currentTarget.setPointerCapture(e.pointerId);
+              setScrubbing(true);
+              const ym = pickYmAtClientY(e.clientY);
+              if (ym) {
+                setHoverYm(ym);
+                scrollToYm(ym, false);
+              }
+            }}
+            onPointerMove={(e) => {
+              const ym = pickYmAtClientY(e.clientY);
+              setHoverYm(ym);
+              if (scrubbing && ym && ym !== activeYm) {
+                scrollToYm(ym, true);
+              }
+            }}
+            onPointerUp={(e) => {
+              if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+                e.currentTarget.releasePointerCapture(e.pointerId);
+              }
+              setScrubbing(false);
+            }}
+            onPointerCancel={() => setScrubbing(false)}
+            onPointerLeave={() => {
+              if (!scrubbing) setHoverYm(null);
+            }}
+            className="flex flex-col items-end gap-1.5 px-1.5 py-2 cursor-ns-resize touch-none"
+          >
+            {timelineEntries.map((entry) => {
+              const isCurrent = (hoverYm || activeYm) === entry.ym;
+              return (
+                <div key={entry.ym} className="flex flex-col items-end gap-1">
+                  {entry.isYearStart && (
+                    <span
+                      className={`text-[10px] leading-none tracking-wider font-medium transition-colors ${
+                        isCurrent || activeYm.startsWith(entry.year)
+                          ? "text-[var(--fg)]"
+                          : "text-[var(--fg-subtle)]"
+                      }`}
+                    >
+                      {entry.year}
+                    </span>
+                  )}
+                  <div className="flex items-center py-0.5">
+                    <span
+                      className={`block rounded-full transition-all duration-200 ${
+                        isCurrent
+                          ? "h-[2px] w-4 bg-[var(--fg)]"
+                          : entry.isYearStart
+                          ? "h-[1.5px] w-2.5 bg-[var(--fg-muted)]/70"
+                          : "h-[1.5px] w-1.5 bg-[var(--fg-subtle)]/50"
+                      }`}
+                    />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </aside>
+      )}
+
+      <SiteFooter settings={settings} />
+
       <Lightbox
         photos={filtered}
         activeIndex={lightboxIdx}
         collectionsMap={collectionsMap}
+        photographerName={settings.photographerName}
+        photographerNameEn={settings.photographerNameEn}
         onClose={() => setLightboxIdx(null)}
         onChangeIndex={setLightboxIdx}
       />

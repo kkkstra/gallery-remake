@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import {
   Aperture,
   ArrowUpRight,
@@ -16,7 +15,9 @@ import {
   Settings,
 } from "lucide-react";
 import { SiteHeader } from "./SiteHeader";
+import { SiteFooter } from "./SiteFooter";
 import { Reveal } from "./Reveal";
+import { ViewLink } from "./ViewLink";
 import { usePreferences } from "./PreferencesProvider";
 
 interface AboutClientProps {
@@ -100,26 +101,36 @@ export function AboutClient({ settings, stats }: AboutClientProps) {
         ];
 
   return (
-    <div className="min-h-dvh flex flex-col pb-16">
+    <div className="relative min-h-dvh flex flex-col overflow-x-clip">
+      {/* Subtle Ambient Depth Orbs */}
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute -top-24 left-1/4 -z-10 h-96 w-96 rounded-full bg-indigo-500/[0.035] blur-3xl"
+      />
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute top-72 right-1/5 -z-10 h-96 w-96 rounded-full bg-teal-500/[0.025] blur-3xl"
+      />
+
       <SiteHeader
         photographerName={settings.photographerName}
         photographerNameEn={settings.photographerNameEn}
       />
 
-      <main className="mx-auto w-full max-w-[1280px] flex-1 px-6 pt-10 sm:px-9 sm:pt-14 space-y-12">
+      <main className="mx-auto w-full max-w-[1280px] flex-1 px-4 pt-6 sm:px-9 sm:pt-14 space-y-8 sm:space-y-12">
         {/* Top Hero Profile Card */}
         <Reveal>
-          <section className="flex flex-col lg:flex-row lg:items-center justify-between gap-8 rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] p-7 sm:p-9">
+          <section className="surface-card flex flex-col lg:flex-row lg:items-center justify-between gap-6 sm:gap-8 rounded-xl p-5 sm:p-9">
             <div className="flex flex-col sm:flex-row sm:items-center gap-6">
               <img
                 src={avatarUrl}
                 alt={name}
-                className="h-28 w-28 sm:h-32 sm:w-32 shrink-0 rounded-full object-cover border border-[var(--border)]"
+                className="h-28 w-28 sm:h-32 sm:w-32 shrink-0 rounded-full object-cover ring-1 ring-[var(--border)]"
               />
               <div className="space-y-2">
                 <div className="flex flex-wrap items-center gap-3">
                   <h1 className="text-3xl font-semibold text-[var(--fg)]">{name}</h1>
-                  <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-0.5 text-xs text-emerald-400">
+                  <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-0.5 text-xs text-emerald-500 dark:text-emerald-400">
                     <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
                     {locale === "en" ? "Available for Commissions" : "商业委任与微喷收藏开放中"}
                   </span>
@@ -135,7 +146,7 @@ export function AboutClient({ settings, stats }: AboutClientProps) {
             </div>
 
             <div className="grid grid-cols-3 gap-4 sm:gap-6 border-t lg:border-t-0 lg:border-l border-[var(--border)] pt-5 lg:pt-0 lg:pl-8 shrink-0">
-              <Link href="/gallery" className="group space-y-1">
+              <ViewLink href="/gallery" className="group space-y-1">
                 <div className="inline-flex items-center gap-1.5 text-xs text-[var(--fg-muted)] group-hover:text-[var(--fg)] transition">
                   <Images className="h-3.5 w-3.5" />
                   <span>{locale === "en" ? "Works" : "收录作品"}</span>
@@ -143,9 +154,9 @@ export function AboutClient({ settings, stats }: AboutClientProps) {
                 <div className="text-2xl sm:text-3xl font-semibold text-[var(--fg)]">
                   {stats.photoCount}
                 </div>
-              </Link>
+              </ViewLink>
 
-              <Link href="/collections" className="group space-y-1">
+              <ViewLink href="/collections" className="group space-y-1">
                 <div className="inline-flex items-center gap-1.5 text-xs text-[var(--fg-muted)] group-hover:text-[var(--fg)] transition">
                   <Layers className="h-3.5 w-3.5" />
                   <span>{locale === "en" ? "Series" : "专题影集"}</span>
@@ -153,7 +164,7 @@ export function AboutClient({ settings, stats }: AboutClientProps) {
                 <div className="text-2xl sm:text-3xl font-semibold text-[var(--fg)]">
                   {stats.collectionCount}
                 </div>
-              </Link>
+              </ViewLink>
 
               <div className="space-y-1">
                 <div className="inline-flex items-center gap-1.5 text-xs text-[var(--fg-muted)]">
@@ -199,7 +210,7 @@ export function AboutClient({ settings, stats }: AboutClientProps) {
                   return (
                     <div
                       key={item.title}
-                      className="rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] p-5 space-y-2"
+                      className="surface-card rounded-lg p-5 space-y-2 transition-transform duration-200 hover:-translate-y-0.5"
                     >
                       <div className="flex items-center gap-2.5 text-[var(--fg)] font-medium text-[15px]">
                         <Icon className="h-4 w-4 text-[var(--fg-muted)] shrink-0" />
@@ -221,7 +232,7 @@ export function AboutClient({ settings, stats }: AboutClientProps) {
                 <span>{locale === "en" ? "Exhibitions & Publications" : "展览与出版记录"}</span>
               </h2>
 
-              <div className="divide-y divide-[var(--border)] rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)]">
+              <div className="surface-card divide-y divide-[var(--border)] rounded-lg">
                 {milestones.map((m) => (
                   <div key={m.title} className="flex items-baseline justify-between gap-4 px-5 py-3.5 text-sm">
                     <div className="space-y-0.5 min-w-0">
@@ -240,7 +251,7 @@ export function AboutClient({ settings, stats }: AboutClientProps) {
                 <span>{locale === "en" ? "Contact & Social" : "联系方式"}</span>
               </h2>
 
-              <div className="divide-y divide-[var(--border)] rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)]">
+              <div className="surface-card divide-y divide-[var(--border)] rounded-lg">
                 {settings.email && (
                   <a
                     href={`mailto:${settings.email}`}
@@ -279,24 +290,17 @@ export function AboutClient({ settings, stats }: AboutClientProps) {
                 )}
               </div>
 
-              <div className="flex items-center justify-between pt-1 text-xs text-[var(--fg-subtle)]">
-                <span>
-                  {locale === "en"
-                    ? "Prints & licensing inquiries welcome via email."
-                    : "商业拍摄与版权合作请通过邮件联系"}
-                </span>
-                <Link
-                  href="/admin"
-                  className="inline-flex items-center gap-1 hover:text-[var(--fg)] transition shrink-0"
-                >
-                  <Settings className="h-3.5 w-3.5" />
-                  <span>{locale === "en" ? "Admin" : "后台"}</span>
-                </Link>
-              </div>
+              <p className="pt-1 text-xs text-[var(--fg-subtle)]">
+                {locale === "en"
+                  ? "Prints & licensing inquiries welcome via email."
+                  : "商业拍摄与版权合作请通过邮件联系"}
+              </p>
             </section>
           </Reveal>
         </div>
       </main>
+
+      <SiteFooter settings={settings} />
     </div>
   );
 }
