@@ -30,6 +30,30 @@ export async function POST(req: Request) {
   return NextResponse.json({ gear: created });
 }
 
+export async function PATCH(req: Request) {
+  if (!(await isAdminAuthenticated())) {
+    return NextResponse.json({ error: "未授权" }, { status: 401 });
+  }
+  await ensureDb();
+  const body = await req.json();
+  const id = Number(body.id);
+  if (!id || !body.name) {
+    return NextResponse.json({ error: "参数不完整" }, { status: 400 });
+  }
+  await db
+    .update(gear)
+    .set({
+      type: body.type === "lens" ? "lens" : "camera",
+      brand: String(body.brand || ""),
+      name: String(body.name),
+      specs: String(body.specs || ""),
+      note: String(body.note || ""),
+      noteEn: String(body.noteEn || ""),
+    })
+    .where(eq(gear.id, id));
+  return NextResponse.json({ ok: true });
+}
+
 export async function DELETE(req: Request) {
   if (!(await isAdminAuthenticated())) {
     return NextResponse.json({ error: "未授权" }, { status: 401 });

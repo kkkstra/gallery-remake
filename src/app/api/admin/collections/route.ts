@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { eq } from "drizzle-orm";
 import { isAdminAuthenticated } from "@/lib/auth";
 import { db, ensureDb } from "@/lib/db";
 import { collections } from "@/lib/db/schema";
@@ -39,4 +40,21 @@ export async function POST(req: Request) {
   }
 
   return NextResponse.json({ collection: created });
+}
+
+export async function PUT(req: Request) {
+  if (!(await isAdminAuthenticated())) {
+    return NextResponse.json({ error: "未授权" }, { status: 401 });
+  }
+  await ensureDb();
+  const { orderedIds } = (await req.json()) as { orderedIds: number[] };
+  if (Array.isArray(orderedIds)) {
+    for (let i = 0; i < orderedIds.length; i++) {
+      await db
+        .update(collections)
+        .set({ sortOrder: i + 1 })
+        .where(eq(collections.id, Number(orderedIds[i])));
+    }
+  }
+  return NextResponse.json({ ok: true });
 }
