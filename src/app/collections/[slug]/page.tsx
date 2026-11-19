@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { getCollectionBySlug, getPhotoCollectionsMap, getSiteSettings } from "@/lib/queries";
+import { getCollectionsWithPhotos, getPhotoCollectionsMap, getSiteSettings } from "@/lib/queries";
 import { CollectionDetailClient } from "@/components/CollectionDetailClient";
 
 export const dynamic = "force-dynamic";
@@ -10,17 +10,23 @@ export default async function CollectionDetailPage({
   params: Promise<{ slug: string }>;
 }) {
   const { slug } = await params;
-  const [collection, collectionsMap, settings] = await Promise.all([
-    getCollectionBySlug(slug),
+  const [allCollections, collectionsMap, settings] = await Promise.all([
+    getCollectionsWithPhotos(),
     getPhotoCollectionsMap(),
     getSiteSettings(),
   ]);
 
-  if (!collection) notFound();
+  const idx = allCollections.findIndex((c) => c.slug === slug);
+  if (idx === -1) notFound();
+
+  const collection = allCollections[idx];
+  const nextCollection =
+    allCollections.length > 1 ? allCollections[(idx + 1) % allCollections.length] : null;
 
   return (
     <CollectionDetailClient
       collection={collection}
+      nextCollection={nextCollection}
       collectionsMap={collectionsMap}
       settings={settings}
     />

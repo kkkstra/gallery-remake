@@ -15,6 +15,73 @@ export const INITIAL_SETTINGS: Record<string, string> = {
   instagram: "https://instagram.com",
   xiaohongshu: "https://xiaohongshu.com",
   weibo: "",
+  siteUrl: "https://gallery.linyuan.photo",
+  copyrightGuard: "false",
+  showShootingStats: "true",
+  aboutAvailableText: "商业委任与微喷收藏开放中",
+  aboutAvailableTextEn: "Available for Commissions",
+  aboutContactNote: "商业拍摄与版权合作请通过邮件联系",
+  aboutContactNoteEn: "Prints & licensing inquiries welcome via email.",
+  aboutFocusJson: JSON.stringify([
+    {
+      icon: "compass",
+      title: "自然地貌与行旅",
+      titleEn: "Landforms & Travel",
+      desc: "长期跟拍高纬度海岸、冰川河谷与季节更替中的自然光影档案。",
+      descEn: "Long-term series across high-latitude coastlines, alpine valleys, and seasonal transitions.",
+    },
+    {
+      icon: "building",
+      title: "城市与建筑空间",
+      titleEn: "Architecture & Space",
+      desc: "记录现代建筑几何、材质冷暖秩序，以及蓝调时刻的城市人文切片。",
+      descEn: "Spatial geometry, material contrast, and blue-hour urban light for studios and architects.",
+    },
+    {
+      icon: "aperture",
+      title: "商业纪实与杂志委任",
+      titleEn: "Editorial & Commissions",
+      desc: "承接建筑事务所、酒店空间、户外与生活方式品牌的专题视觉拍摄。",
+      descEn: "Visual storytelling, brand documentaries, and travel features on assignment.",
+    },
+    {
+      icon: "frame",
+      title: "艺术微喷收藏",
+      titleEn: "Fine Art Prints",
+      desc: "部分作品提供博物馆级哈内姆勒纯棉艺术纸限量签名微喷定制。",
+      descEn: "Signed archival pigment prints on museum-grade cotton rag paper upon inquiry.",
+    },
+  ]),
+  aboutMilestonesJson: JSON.stringify([
+    {
+      year: "2026",
+      title: "个人摄影展《暮色与秩序》",
+      titleEn: "Solo Exhibition — Nocturne & Geometry",
+      place: "上海 · 静安艺术空间",
+      placeEn: "Shanghai",
+    },
+    {
+      year: "2025",
+      title: "独立摄影画册《Silent Latitudes》初版印行",
+      titleEn: "Photobook — Silent Latitudes (1st Ed.)",
+      place: "限量 300 册",
+      placeEn: "Self-Published",
+    },
+    {
+      year: "2025",
+      title: "联展《北方纬度与光》",
+      titleEn: "Group Show — Northern Light & Form",
+      place: "东京 · 代官山画廊",
+      placeEn: "Daikanyama, Tokyo",
+    },
+    {
+      year: "2024",
+      title: "年度旅行与自然影像评选入围",
+      titleEn: "Finalist — Landscape & Travel Awards",
+      place: "风光与纪实组",
+      placeEn: "London",
+    },
+  ]),
 };
 
 export const INITIAL_PHOTOS: Omit<NewPhoto, "createdAt">[] = [

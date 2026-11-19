@@ -346,6 +346,7 @@ export function HomeStageClient({
                         src={item.url}
                         alt={iTitle}
                         ambient={item.ambient}
+                        blurData={item.blurData}
                         aspectRatio={`${item.width || 1600} / ${item.height || 1068}`}
                         className="w-full h-full"
                       />

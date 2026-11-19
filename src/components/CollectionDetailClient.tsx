@@ -1,34 +1,113 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Aperture, ArrowLeft, Calendar, Camera, Images, Maximize2, MapPin } from "lucide-react";
+import { Aperture, ArrowLeft, ArrowRight, Camera, Images, MapPin } from "lucide-react";
 import type { CollectionWithPhotos } from "@/lib/queries";
 import type { Photo } from "@/lib/db/schema";
+import { parseMonographBlocks, type MonographCoverBlock, type MonographPhotoBlock } from "@/lib/monograph";
 import { SiteHeader } from "./SiteHeader";
 import { SiteFooter } from "./SiteFooter";
 import { Lightbox } from "./Lightbox";
 import { Reveal } from "./Reveal";
+import { GalleryImage } from "./GalleryImage";
 import { ViewLink } from "./ViewLink";
 import { usePreferences } from "./PreferencesProvider";
 
 interface CollectionDetailClientProps {
   collection: CollectionWithPhotos;
+  nextCollection?: CollectionWithPhotos | null;
   collectionsMap: Record<number, { slug: string; title: string; titleEn: string }[]>;
   settings: Record<string, string>;
 }
 
+type RenderSegment =
+  | { type: "cover"; block: MonographCoverBlock; isFirstCover: boolean }
+  | { type: "annotated"; block: MonographPhotoBlock; photo: Photo; lightboxIndex: number }
+  | { type: "single"; photo: Photo; lightboxIndex: number; alignRight: boolean }
+  | { type: "pair"; left: { photo: Photo; lightboxIndex: number }; right: { photo: Photo; lightboxIndex: number } };
+
 export function CollectionDetailClient({
   collection,
+  nextCollection,
   collectionsMap,
   settings,
 }: CollectionDetailClientProps) {
-  const { locale, pick } = usePreferences();
+  const { locale, copyrightGuard, pick } = usePreferences();
   const [lightboxIdx, setLightboxIdx] = useState<number | null>(null);
   const spreadsContainerRef = useRef<HTMLDivElement>(null);
 
-  const photos = collection.photos;
-  const title = pick(collection.title, collection.titleEn);
-  const desc = pick(collection.description, collection.descriptionEn);
+  const blocks = useMemo(() => parseMonographBlocks(collection.blocksJson, collection), [collection]);
+
+  // Ordered photos matching the monograph sequence for Lightbox navigation
+  const orderedPhotos = useMemo(() => {
+    const map = new Map(collection.photos.map((p) => [p.id, p]));
+    const list: Photo[] = [];
+    for (const b of blocks) {
+      if (b.kind === "photo") {
+        const found = map.get(b.photoId);
+        if (found) list.push(found);
+      }
+    }
+    return list.length > 0 ? list : collection.photos;
+  }, [blocks, collection.photos]);
+
+  // Build render segments: Cover Pages (can be multiple!) + Annotated Side-Note Plates + Single/Paired Pure Plates
+  const segments = useMemo<RenderSegment[]>(() => {
+    const map = new Map(collection.photos.map((p) => [p.id, p]));
+    const idxMap = new Map(orderedPhotos.map((p, idx) => [p.id, idx]));
+    const out: RenderSegment[] = [];
+    let pureQueue: { photo: Photo; lightboxIndex: number }[] = [];
+    let pureGroupCount = 0;
+    let seenFirstCover = false;
+
+    const flushPureQueue = () => {
+      let i = 0;
+      while (i < pureQueue.length) {
+        if (pureGroupCount % 2 === 0 || i === pureQueue.length - 1) {
+          out.push({
+            type: "single",
+            photo: pureQueue[i].photo,
+            lightboxIndex: pureQueue[i].lightboxIndex,
+            alignRight: pureGroupCount % 4 === 2,
+          });
+          i += 1;
+        } else {
+          out.push({
+            type: "pair",
+            left: pureQueue[i],
+            right: pureQueue[i + 1],
+          });
+          i += 2;
+        }
+        pureGroupCount += 1;
+      }
+      pureQueue = [];
+    };
+
+    for (const b of blocks) {
+      if (b.kind === "cover") {
+        flushPureQueue();
+        out.push({ type: "cover", block: b, isFirstCover: !seenFirstCover });
+        seenFirstCover = true;
+      } else {
+        const photo = map.get(b.photoId);
+        if (!photo) continue;
+        const lbIdx = idxMap.get(photo.id) ?? 0;
+        const hasNote = Boolean((b.sideNote && b.sideNote.trim()) || (b.sideNoteEn && b.sideNoteEn.trim()));
+        if (hasNote) {
+          flushPureQueue();
+          out.push({ type: "annotated", block: b, photo, lightboxIndex: lbIdx });
+        } else {
+          pureQueue.push({ photo, lightboxIndex: lbIdx });
+        }
+      }
+    }
+    flushPureQueue();
+    return out;
+  }, [blocks, collection.photos, orderedPhotos]);
+
+  const startsWithFullCover =
+    segments[0]?.type === "cover" && segments[0].block.style === "full" && Boolean(segments[0].block.imageUrl);
 
   // Subtle GPU-composited scroll parallax on offset paired plates
   useEffect(() => {
@@ -55,28 +134,7 @@ export function CollectionDetailClient({
       cancelAnimationFrame(raf);
       window.removeEventListener("scroll", updateParallax);
     };
-  }, [photos.length]);
-
-  const spreads = useMemo(() => {
-    const out: { kind: "single" | "pair"; items: { photo: Photo; idx: number }[] }[] = [];
-    let i = 0;
-    while (i < photos.length) {
-      if (out.length % 2 === 0 || i === photos.length - 1) {
-        out.push({ kind: "single", items: [{ photo: photos[i], idx: i }] });
-        i += 1;
-      } else {
-        out.push({
-          kind: "pair",
-          items: [
-            { photo: photos[i], idx: i },
-            { photo: photos[i + 1], idx: i + 1 },
-          ],
-        });
-        i += 2;
-      }
-    }
-    return out;
-  }, [photos]);
+  }, [segments.length]);
 
   const PlateCaption = ({ photo }: { photo: Photo }) => {
     const pTitle = pick(photo.title, photo.titleEn);
@@ -112,175 +170,359 @@ export function CollectionDetailClient({
     );
   };
 
+  const renderCoverBlock = (seg: Extract<RenderSegment, { type: "cover" }>, index: number) => {
+    const { block, isFirstCover } = seg;
+    const cEyebrow = pick(block.eyebrow, block.eyebrowEn);
+    const cTitle = pick(block.title, block.titleEn);
+    const cSubtitle = locale === "zh" ? block.titleEn : block.title;
+    const cBody = pick(block.body, block.bodyEn);
+
+    if (block.style === "full" && block.imageUrl) {
+      return (
+        <section
+          key={block.id}
+          className={`relative flex w-full items-end overflow-hidden bg-black ${
+            index === 0 ? "h-[68dvh] sm:h-[76dvh]" : "mx-auto max-w-[1320px] rounded-lg h-[52dvh] sm:h-[62dvh]"
+          }`}
+        >
+          <img
+            src={block.imageUrl}
+            alt={cTitle}
+            draggable={!copyrightGuard}
+            onContextMenu={(e) => copyrightGuard && e.preventDefault()}
+            style={isFirstCover ? { viewTransitionName: `series-cover-${collection.slug}` } : undefined}
+            className="absolute inset-0 h-full w-full object-cover opacity-80 animate-hero-breath"
+          />
+          <div
+            aria-hidden="true"
+            className="absolute inset-0 bg-gradient-to-t from-black/88 via-black/42 to-black/22"
+          />
+          <div className="relative z-10 mx-auto w-full max-w-[1320px] px-4 pb-8 sm:px-9 sm:pb-14 text-white space-y-3.5">
+            {isFirstCover && (
+              <ViewLink
+                href="/collections"
+                className="inline-flex items-center gap-1.5 text-xs sm:text-sm text-white/75 hover:text-white transition"
+              >
+                <ArrowLeft className="h-4 w-4" />
+                <span>{locale === "en" ? "All Series" : "返回影集"}</span>
+              </ViewLink>
+            )}
+            <div className="space-y-2 max-w-2xl">
+              <div className="flex flex-wrap items-center gap-4 text-xs sm:text-sm text-white/75">
+                {cEyebrow && <span className="tracking-[0.14em] uppercase">{cEyebrow}</span>}
+                {isFirstCover && (
+                  <span className="inline-flex items-center gap-1.5">
+                    <Images className="h-3.5 w-3.5 opacity-80" />
+                    {orderedPhotos.length} {locale === "en" ? "Plates" : "幅作品"}
+                  </span>
+                )}
+              </div>
+              {cTitle && (
+                <h1 className={isFirstCover ? "text-3xl sm:text-5xl font-semibold tracking-tight" : "text-2xl sm:text-4xl font-semibold tracking-tight"}>
+                  {cTitle}
+                </h1>
+              )}
+              {cSubtitle && cSubtitle !== cTitle && (
+                <p className="text-sm sm:text-base text-white/70">{cSubtitle}</p>
+              )}
+            </div>
+            {cBody && (
+              <p className="max-w-2xl text-sm sm:text-[15px] leading-7 text-white/82 pt-0.5 whitespace-pre-line">
+                {cBody}
+              </p>
+            )}
+          </div>
+        </section>
+      );
+    }
+
+    if (block.style === "split" && block.imageUrl) {
+      return (
+        <Reveal key={block.id}>
+          <section className="mx-auto max-w-[1320px] px-4 sm:px-9">
+            <div className="surface-card grid grid-cols-1 lg:grid-cols-12 overflow-hidden rounded-lg">
+              <div className="lg:col-span-7 relative min-h-[280px] sm:min-h-[380px] overflow-hidden bg-[var(--bg-subtle)]">
+                <img
+                  src={block.imageUrl}
+                  alt={cTitle}
+                  draggable={!copyrightGuard}
+                  onContextMenu={(e) => copyrightGuard && e.preventDefault()}
+                  className="h-full w-full object-cover"
+                />
+              </div>
+              <div className="lg:col-span-5 flex flex-col justify-center p-6 sm:p-10 space-y-3.5">
+                {isFirstCover && (
+                  <ViewLink
+                    href="/collections"
+                    className="inline-flex items-center gap-1.5 text-xs text-[var(--fg-muted)] hover:text-[var(--fg)] transition pb-1"
+                  >
+                    <ArrowLeft className="h-3.5 w-3.5" />
+                    <span>{locale === "en" ? "All Series" : "返回影集"}</span>
+                  </ViewLink>
+                )}
+                {cEyebrow && (
+                  <span className="text-xs tracking-[0.16em] uppercase text-[var(--fg-subtle)]">
+                    {cEyebrow}
+                  </span>
+                )}
+                {cTitle && (
+                  <h2 className="text-2xl sm:text-3xl font-semibold text-[var(--fg)]">{cTitle}</h2>
+                )}
+                {cBody && (
+                  <p className="text-sm sm:text-[15px] leading-7 text-[var(--fg-muted)] whitespace-pre-line">
+                    {cBody}
+                  </p>
+                )}
+              </div>
+            </div>
+          </section>
+        </Reveal>
+      );
+    }
+
+    // Minimalist Typographic Chapter / Title Page
+    return (
+      <Reveal key={block.id}>
+        <section className="mx-auto max-w-2xl px-4 py-8 sm:px-9 sm:py-12 text-center space-y-3 border-y border-[var(--border)]">
+          {isFirstCover && (
+            <div className="pb-2">
+              <ViewLink
+                href="/collections"
+                className="inline-flex items-center gap-1.5 text-xs text-[var(--fg-muted)] hover:text-[var(--fg)] transition"
+              >
+                <ArrowLeft className="h-3.5 w-3.5" />
+                <span>{locale === "en" ? "All Series" : "返回影集"}</span>
+              </ViewLink>
+            </div>
+          )}
+          {cEyebrow && (
+            <div className="text-xs tracking-[0.18em] uppercase text-[var(--fg-subtle)]">{cEyebrow}</div>
+          )}
+          {cTitle && (
+            <h2 className="text-2xl sm:text-3xl font-semibold text-[var(--fg)]">{cTitle}</h2>
+          )}
+          {cBody && (
+            <p className="text-sm sm:text-[15px] leading-7 text-[var(--fg-muted)] whitespace-pre-line">
+              {cBody}
+            </p>
+          )}
+        </section>
+      </Reveal>
+    );
+  };
+
   return (
     <div className="min-h-dvh flex flex-col">
       <SiteHeader
+        overlay={startsWithFullCover}
         photographerName={settings.photographerName}
         photographerNameEn={settings.photographerNameEn}
       />
 
-      <main className="mx-auto w-full max-w-[1320px] flex-1 px-4 pt-6 sm:px-9 sm:pt-10">
-        <header className="max-w-2xl space-y-3 sm:space-y-4 border-b border-[var(--border)] pb-8 sm:pb-12">
-          <ViewLink
-            href="/collections"
-            className="inline-flex items-center gap-1.5 text-sm text-[var(--fg-muted)] hover:text-[var(--fg)] transition"
-          >
-            <ArrowLeft className="h-4 w-4" />
-            <span>{locale === "en" ? "Series" : "返回影集"}</span>
-          </ViewLink>
+      {/* Render Leading Full-Bleed Cover Outside Padded Container */}
+      {startsWithFullCover && renderCoverBlock(segments[0] as Extract<RenderSegment, { type: "cover" }>, 0)}
 
-          <div className="space-y-2">
-            <div className="flex items-center gap-4 text-sm text-[var(--fg-muted)]">
-              {collection.period && (
-                <span className="inline-flex items-center gap-1.5">
-                  <Calendar className="h-4 w-4 opacity-75" />
-                  {collection.period}
-                </span>
-              )}
-              <span className="inline-flex items-center gap-1.5">
-                <Images className="h-4 w-4 opacity-75" />
-                {photos.length} {locale === "en" ? "Photos" : "幅"}
-              </span>
-            </div>
-            <h1 className="text-3xl sm:text-4xl font-semibold text-[var(--fg)]">{title}</h1>
-          </div>
+      <div ref={spreadsContainerRef} className="flex-1 pt-10 sm:pt-18 space-y-16 sm:space-y-28">
+        {segments.map((seg, idx) => {
+          if (idx === 0 && startsWithFullCover) return null;
 
-          {desc && <p className="text-[15px] leading-7 text-[var(--fg-muted)]">{desc}</p>}
-        </header>
+          if (seg.type === "cover") {
+            return (
+              <div key={seg.block.id} className="px-4 sm:px-0">
+                {renderCoverBlock(seg, idx)}
+              </div>
+            );
+          }
 
-        {/* Relaxed Monograph Spreads with Subtle Parallax Depth & Shared-Element Morph */}
-        <div ref={spreadsContainerRef} className="pt-10 sm:pt-16 space-y-14 sm:space-y-32">
-          {spreads.map((row, rIdx) => {
-            if (row.kind === "single") {
-              const photo = row.items[0].photo;
-              const isPortrait = (photo.height || 1068) > (photo.width || 1600);
-              const isLeadCover = rIdx === 0 && photo.url === collection.coverUrl;
-              return (
-                <Reveal key={photo.id}>
+          if (seg.type === "annotated") {
+            const { photo, block, lightboxIndex } = seg;
+            const noteText = pick(block.sideNote, block.sideNoteEn);
+            const noteLeft = block.noteAlign === "left";
+            const isPortrait = (photo.height || 1068) > (photo.width || 1600);
+
+            return (
+              <Reveal key={block.id}>
+                <div className="mx-auto max-w-[1320px] px-4 sm:px-9 grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-12 items-center">
                   <figure
-                    onClick={() => setLightboxIdx(row.items[0].idx)}
+                    onClick={() => setLightboxIdx(lightboxIndex)}
+                    className={`group cursor-pointer ${
+                      noteLeft
+                        ? isPortrait
+                          ? "lg:col-span-5 lg:col-start-8 lg:order-2"
+                          : "lg:col-span-7 lg:order-2"
+                        : isPortrait
+                        ? "lg:col-span-5 lg:col-start-2"
+                        : "lg:col-span-7"
+                    }`}
+                  >
+                    <GalleryImage
+                      photoId={photo.id}
+                      src={photo.url}
+                      alt={pick(photo.title, photo.titleEn)}
+                      ambient={photo.ambient}
+                      blurData={photo.blurData}
+                      aspectRatio={`${photo.width || 1600} / ${photo.height || 1068}`}
+                      className="w-full"
+                    />
+                    <PlateCaption photo={photo} />
+                  </figure>
+
+                  <div
+                    className={`space-y-3 ${
+                      noteLeft
+                        ? "lg:col-span-5 lg:order-1"
+                        : "lg:col-span-5"
+                    }`}
+                  >
+                    <div className="border-l-2 border-[var(--border)] pl-5 space-y-2.5">
+                      <h3 className="text-lg sm:text-xl font-semibold text-[var(--fg)]">
+                        {pick(photo.title, photo.titleEn)}
+                      </h3>
+                      <p className="text-sm sm:text-[15px] leading-7 text-[var(--fg-muted)] whitespace-pre-line">
+                        {noteText}
+                      </p>
+                      {(photo.location || photo.takenAt) && (
+                        <div className="pt-1 text-xs text-[var(--fg-subtle)]">
+                          {[pick(photo.location, photo.locationEn), photo.takenAt].filter(Boolean).join(" · ")}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </Reveal>
+            );
+          }
+
+          if (seg.type === "single") {
+            const { photo, lightboxIndex, alignRight } = seg;
+            const isPortrait = (photo.height || 1068) > (photo.width || 1600);
+            return (
+              <Reveal key={`single-${photo.id}`}>
+                <div className="mx-auto max-w-[1320px] px-4 sm:px-9">
+                  <figure
+                    onClick={() => setLightboxIdx(lightboxIndex)}
                     className={`group cursor-pointer ${
                       isPortrait
                         ? "mx-auto max-w-[420px]"
-                        : rIdx % 4 === 0
-                        ? "max-w-[820px] md:ml-auto"
-                        : "max-w-[820px]"
+                        : alignRight
+                        ? "max-w-[840px] md:ml-auto"
+                        : "max-w-[840px]"
                     }`}
                   >
-                    <div className="relative isolate">
-                      <img
-                        src={photo.url}
-                        alt=""
-                        aria-hidden="true"
-                        decoding="async"
-                        className="ambient-photo-halo pointer-events-none absolute -inset-2 -z-10 h-[calc(100%+16px)] w-[calc(100%+16px)] max-w-none rounded-xl object-cover"
-                      />
-                      <div className="photo-frame relative overflow-hidden">
-                        <img
-                          data-morph-photo-id={photo.id}
-                          src={photo.url}
-                          alt={photo.title}
-                          style={
-                            isLeadCover ? { viewTransitionName: `series-cover-${collection.slug}` } : undefined
-                          }
-                          className="w-full h-auto block transition duration-600 ease-out group-hover:scale-[1.015]"
-                        />
-                        <span
-                          aria-hidden="true"
-                          className="pointer-events-none absolute right-3 top-3 flex h-7 w-7 items-center justify-center rounded-full border border-white/20 bg-black/45 text-white/90 opacity-0 scale-90 backdrop-blur-md transition-all duration-250 group-hover:opacity-100 group-hover:scale-100"
-                        >
-                          <Maximize2 className="h-3.5 w-3.5 stroke-[1.6]" />
-                        </span>
-                      </div>
-                    </div>
+                    <GalleryImage
+                      photoId={photo.id}
+                      src={photo.url}
+                      alt={pick(photo.title, photo.titleEn)}
+                      ambient={photo.ambient}
+                      blurData={photo.blurData}
+                      aspectRatio={`${photo.width || 1600} / ${photo.height || 1068}`}
+                      className="w-full"
+                    />
                     <PlateCaption photo={photo} />
-                  </figure>
-                </Reveal>
-              );
-            }
-
-            const leftPortrait = (row.items[0].photo.height || 1068) > (row.items[0].photo.width || 1600);
-            const rightPortrait = (row.items[1].photo.height || 1068) > (row.items[1].photo.width || 1600);
-
-            return (
-              <Reveal key={`pair-${rIdx}`}>
-                <div className="grid grid-cols-1 gap-12 md:grid-cols-12 items-start">
-                  <figure
-                    data-parallax-speed="-12"
-                    onClick={() => setLightboxIdx(row.items[0].idx)}
-                    className={`group cursor-pointer will-change-transform ${
-                      leftPortrait ? "md:col-span-4 md:col-start-2" : "md:col-span-5"
-                    }`}
-                  >
-                    <div className="relative isolate">
-                      <img
-                        src={row.items[0].photo.url}
-                        alt=""
-                        aria-hidden="true"
-                        decoding="async"
-                        className="ambient-photo-halo pointer-events-none absolute -inset-2 -z-10 h-[calc(100%+16px)] w-[calc(100%+16px)] max-w-none rounded-xl object-cover"
-                      />
-                      <div className="photo-frame relative overflow-hidden">
-                        <img
-                          data-morph-photo-id={row.items[0].photo.id}
-                          src={row.items[0].photo.url}
-                          alt={row.items[0].photo.title}
-                          className="w-full h-auto block transition duration-600 ease-out group-hover:scale-[1.02]"
-                        />
-                        <span
-                          aria-hidden="true"
-                          className="pointer-events-none absolute right-3 top-3 flex h-7 w-7 items-center justify-center rounded-full border border-white/20 bg-black/45 text-white/90 opacity-0 scale-90 backdrop-blur-md transition-all duration-250 group-hover:opacity-100 group-hover:scale-100"
-                        >
-                          <Maximize2 className="h-3.5 w-3.5 stroke-[1.6]" />
-                        </span>
-                      </div>
-                    </div>
-                    <PlateCaption photo={row.items[0].photo} />
-                  </figure>
-
-                  <figure
-                    data-parallax-speed="16"
-                    onClick={() => setLightboxIdx(row.items[1].idx)}
-                    className={`group cursor-pointer md:mt-20 will-change-transform ${
-                      rightPortrait ? "md:col-span-4 md:col-start-8" : "md:col-span-6 md:col-start-7"
-                    }`}
-                  >
-                    <div className="relative isolate">
-                      <img
-                        src={row.items[1].photo.url}
-                        alt=""
-                        aria-hidden="true"
-                        decoding="async"
-                        className="ambient-photo-halo pointer-events-none absolute -inset-2 -z-10 h-[calc(100%+16px)] w-[calc(100%+16px)] max-w-none rounded-xl object-cover"
-                      />
-                      <div className="photo-frame relative overflow-hidden">
-                        <img
-                          data-morph-photo-id={row.items[1].photo.id}
-                          src={row.items[1].photo.url}
-                          alt={row.items[1].photo.title}
-                          className="w-full h-auto block transition duration-600 ease-out group-hover:scale-[1.02]"
-                        />
-                        <span
-                          aria-hidden="true"
-                          className="pointer-events-none absolute right-3 top-3 flex h-7 w-7 items-center justify-center rounded-full border border-white/20 bg-black/45 text-white/90 opacity-0 scale-90 backdrop-blur-md transition-all duration-250 group-hover:opacity-100 group-hover:scale-100"
-                        >
-                          <Maximize2 className="h-3.5 w-3.5 stroke-[1.6]" />
-                        </span>
-                      </div>
-                    </div>
-                    <PlateCaption photo={row.items[1].photo} />
                   </figure>
                 </div>
               </Reveal>
             );
-          })}
-        </div>
-      </main>
+          }
+
+          const { left, right } = seg;
+          const leftPortrait = (left.photo.height || 1068) > (left.photo.width || 1600);
+          const rightPortrait = (right.photo.height || 1068) > (right.photo.width || 1600);
+
+          return (
+            <Reveal key={`pair-${left.photo.id}-${right.photo.id}`}>
+              <div className="mx-auto max-w-[1320px] px-4 sm:px-9 grid grid-cols-1 gap-12 md:grid-cols-12 items-start">
+                <figure
+                  data-parallax-speed="-12"
+                  onClick={() => setLightboxIdx(left.lightboxIndex)}
+                  className={`group cursor-pointer will-change-transform ${
+                    leftPortrait ? "md:col-span-4 md:col-start-2" : "md:col-span-5"
+                  }`}
+                >
+                  <GalleryImage
+                    photoId={left.photo.id}
+                    src={left.photo.url}
+                    alt={pick(left.photo.title, left.photo.titleEn)}
+                    ambient={left.photo.ambient}
+                    blurData={left.photo.blurData}
+                    aspectRatio={`${left.photo.width || 1600} / ${left.photo.height || 1068}`}
+                    className="w-full"
+                  />
+                  <PlateCaption photo={left.photo} />
+                </figure>
+
+                <figure
+                  data-parallax-speed="16"
+                  onClick={() => setLightboxIdx(right.lightboxIndex)}
+                  className={`group cursor-pointer md:mt-20 will-change-transform ${
+                    rightPortrait ? "md:col-span-4 md:col-start-8" : "md:col-span-6 md:col-start-7"
+                  }`}
+                >
+                  <GalleryImage
+                    photoId={right.photo.id}
+                    src={right.photo.url}
+                    alt={pick(right.photo.title, right.photo.titleEn)}
+                    ambient={right.photo.ambient}
+                    blurData={right.photo.blurData}
+                    aspectRatio={`${right.photo.width || 1600} / ${right.photo.height || 1068}`}
+                    className="w-full"
+                  />
+                  <PlateCaption photo={right.photo} />
+                </figure>
+              </div>
+            </Reveal>
+          );
+        })}
+
+        {/* End-of-Monograph Next Series Handoff */}
+        {nextCollection && (
+          <Reveal>
+            <section className="mx-auto max-w-[1320px] px-4 sm:px-9 pt-6">
+              <div className="border-t border-[var(--border)] pt-10">
+                <ViewLink
+                  href={`/collections/${nextCollection.slug}`}
+                  className="group photo-frame relative block h-48 sm:h-64 w-full overflow-hidden rounded-lg bg-black"
+                >
+                  {nextCollection.coverUrl && (
+                    <img
+                      src={nextCollection.coverUrl}
+                      alt={pick(nextCollection.title, nextCollection.titleEn)}
+                      className="h-full w-full object-cover opacity-72 transition-[scale,transform] duration-700 ease-out group-hover:scale-[1.03]"
+                    />
+                  )}
+                  <div
+                    aria-hidden="true"
+                    className="absolute inset-0 bg-gradient-to-r from-black/82 via-black/42 to-black/25"
+                  />
+                  <div className="absolute inset-0 flex items-center justify-between gap-6 px-6 sm:px-10 text-white">
+                    <div className="space-y-1.5 min-w-0">
+                      <span className="text-xs tracking-[0.16em] uppercase text-white/70">
+                        {locale === "en" ? "Next Series" : "下一部影集"}
+                      </span>
+                      <h2 className="truncate text-2xl sm:text-3xl font-semibold">
+                        {pick(nextCollection.title, nextCollection.titleEn)}
+                      </h2>
+                      <p className="text-xs sm:text-sm text-white/75">
+                        {[nextCollection.period, `${nextCollection.photoCount} ${locale === "en" ? "Photos" : "幅"}`]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </p>
+                    </div>
+                    <span className="inline-flex h-10 w-10 sm:h-11 sm:w-11 shrink-0 items-center justify-center rounded-full border border-white/30 bg-white/10 backdrop-blur-md transition-transform duration-300 group-hover:translate-x-1">
+                      <ArrowRight className="h-5 w-5" />
+                    </span>
+                  </div>
+                </ViewLink>
+              </div>
+            </section>
+          </Reveal>
+        )}
+      </div>
 
       <SiteFooter settings={settings} />
 
       <Lightbox
-        photos={photos}
+        photos={orderedPhotos}
         activeIndex={lightboxIdx}
         collectionsMap={collectionsMap}
         photographerName={settings.photographerName}

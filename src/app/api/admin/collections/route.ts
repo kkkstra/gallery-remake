@@ -29,6 +29,7 @@ export async function POST(req: Request) {
       descriptionEn: String(body.descriptionEn || ""),
       coverUrl: String(body.coverUrl || ""),
       period: String(body.period || ""),
+      blocksJson: typeof body.blocksJson === "string" ? body.blocksJson : "",
       sortOrder: Number(body.sortOrder) || 0,
     })
     .returning();

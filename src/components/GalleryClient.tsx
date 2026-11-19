@@ -7,6 +7,7 @@ import {
   Building2,
   Camera,
   ChevronDown,
+  Grid3x3,
   Images,
   LayoutGrid,
   MapPin,
@@ -93,7 +94,9 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
   const initialCat = searchParams.get("category") || "all";
   const initialCamera = searchParams.get("camera") || "all";
   const initialLens = searchParams.get("lens") || "all";
-  const initialView = searchParams.get("view") === "index" ? "index" : "mosaic";
+  const qView = searchParams.get("view");
+  const initialView: "mosaic" | "index" | "sheet" =
+    qView === "index" ? "index" : qView === "sheet" ? "sheet" : "mosaic";
 
   const [category, setCategoryState] = useState(initialCat);
   const [camera, setCameraState] = useState(initialCamera);
@@ -102,7 +105,7 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
     initialLens !== "all" && initialCamera === "all" ? "lens" : "camera"
   );
   const [gearOpen, setGearOpen] = useState(initialCamera !== "all" || initialLens !== "all");
-  const [view, setViewState] = useState<"mosaic" | "index">(initialView);
+  const [view, setViewState] = useState<"mosaic" | "index" | "sheet">(initialView);
   const [lightboxIdx, setLightboxIdx] = useState<number | null>(null);
 
   // FLIP + Staggered Entrance animation refs
@@ -139,7 +142,7 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
     setLensState(next);
   };
 
-  const changeView = (next: "mosaic" | "index") => {
+  const changeView = (next: "mosaic" | "index" | "sheet") => {
     if (next === view) return;
     captureSnapshot();
     setViewState(next);
@@ -493,6 +496,19 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
               >
                 <LayoutGrid className="h-4 w-4" />
               </button>
+              <button
+                type="button"
+                onClick={() => changeView("sheet")}
+                aria-label={locale === "en" ? "Contact Sheet" : "接触印相表"}
+                title={locale === "en" ? "Contact Sheet" : "接触印相表"}
+                className={`p-2 transition-colors duration-200 cursor-pointer ${
+                  view === "sheet"
+                    ? "bg-[var(--fg)] text-[var(--bg)]"
+                    : "bg-[var(--bg-elevated)] text-[var(--fg-muted)] hover:text-[var(--fg)]"
+                }`}
+              >
+                <Grid3x3 className="h-4 w-4" />
+              </button>
             </div>
           </div>
         </div>
@@ -682,6 +698,7 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
                           src={photo.url}
                           alt={title}
                           ambient={photo.ambient}
+                          blurData={photo.blurData}
                           aspectRatio={`${photo.width || 1600} / ${photo.height || 1068}`}
                           className="w-full h-full"
                         />
@@ -714,7 +731,7 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
               );
             })}
           </main>
-        ) : (
+        ) : view === "index" ? (
           /* View 2: Dense Span-Aware Bento Index */
           <main className="mx-auto max-w-[1440px] px-4 sm:px-9 pt-5 sm:pt-7">
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5 sm:gap-6 sm:auto-rows-[305px] grid-flow-dense">
@@ -738,6 +755,7 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
                       src={photo.url}
                       alt={title}
                       ambient={photo.ambient}
+                      blurData={photo.blurData}
                       style={{ "--mobile-ar": `${photo.width || 1600} / ${photo.height || 1068}` } as React.CSSProperties}
                       className="flex-1 [aspect-ratio:var(--mobile-ar)] sm:[aspect-ratio:auto] sm:min-h-0"
                     />
@@ -755,6 +773,40 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
                         <Aperture className="h-3 w-3 opacity-70" />
                         {[photo.focalMm ? `${photo.focalMm}mm` : "", photo.aperture].filter(Boolean).join(" ")}
                       </span>
+                    </figcaption>
+                  </figure>
+                );
+              })}
+            </div>
+          </main>
+        ) : (
+          /* View 3: Darkroom Contact Sheet (Uncropped Full-Frame Negatives + Frame Numbers) */
+          <main className="mx-auto max-w-[1440px] px-4 sm:px-9 pt-5 sm:pt-7">
+            <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-x-3 gap-y-5 sm:gap-x-5 sm:gap-y-7">
+              {filtered.map((photo, flatIdx) => {
+                const title = pick(photo.title, photo.titleEn);
+                return (
+                  <figure
+                    key={photo.id}
+                    data-photo-id={photo.id}
+                    data-ym={(photo.takenAt || "").slice(0, 7)}
+                    onClick={() => setLightboxIdx(flatIdx)}
+                    className="group flex flex-col cursor-pointer will-change-transform"
+                  >
+                    <div className="flex items-center justify-between pb-1.5 text-[10px] tracking-wider text-[var(--fg-subtle)]">
+                      <span>#{String(flatIdx + 1).padStart(2, "0")}A</span>
+                      <span>{photo.focalMm ? `${photo.focalMm}mm` : ""}</span>
+                    </div>
+                    <div className="aspect-square flex items-center justify-center rounded-xs border border-[var(--border)] bg-[var(--bg-subtle)] p-2 sm:p-2.5 group-hover:border-[var(--fg-muted)] transition-colors">
+                      <img
+                        data-morph-photo-id={photo.id}
+                        src={photo.url}
+                        alt={title}
+                        className="max-h-full max-w-full object-contain transition-[scale,transform] duration-300 group-hover:scale-[1.04]"
+                      />
+                    </div>
+                    <figcaption className="pt-1.5 truncate text-[11px] sm:text-xs text-[var(--fg-muted)] group-hover:text-[var(--fg)] transition-colors">
+                      {title}
                     </figcaption>
                   </figure>
                 );

@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { getAllPhotos, getPhotoCollectionsMap, getSiteSettings } from "@/lib/queries";
 import { MapClient } from "@/components/MapClient";
 
@@ -11,10 +12,12 @@ export default async function MapPage() {
   ]);
 
   return (
-    <MapClient
-      photos={photos}
-      collectionsMap={collectionsMap}
-      settings={settings}
-    />
+    <Suspense fallback={<div className="min-h-dvh bg-[var(--bg)]" />}>
+      <MapClient
+        photos={photos}
+        collectionsMap={collectionsMap}
+        settings={settings}
+      />
+    </Suspense>
   );
 }

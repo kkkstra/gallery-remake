@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { isAdminAuthenticated } from "@/lib/auth";
 import { db, ensureDb } from "@/lib/db";
 import { collectionPhotos, photos } from "@/lib/db/schema";
@@ -25,6 +25,7 @@ export async function POST(req: Request) {
       width: Number(body.width) || 1600,
       height: Number(body.height) || 1068,
       ambient: String(body.ambient || "#1e2024"),
+      blurData: String(body.blurData || ""),
       category: String(body.category || "landscape"),
       featured: Boolean(body.featured),
       sortOrder: Number(body.sortOrder) || 0,
@@ -70,4 +71,39 @@ export async function PUT(req: Request) {
     }
   }
   return NextResponse.json({ ok: true });
+}
+
+export async function PATCH(req: Request) {
+  if (!(await isAdminAuthenticated())) {
+    return NextResponse.json({ error: "未授权" }, { status: 401 });
+  }
+  await ensureDb();
+  const body = await req.json();
+  const ids: number[] = Array.isArray(body.ids)
+    ? body.ids.map(Number).filter((n: number) => Number.isFinite(n) && n > 0)
+    : [];
+
+  if (ids.length === 0) {
+    return NextResponse.json({ error: "未选择作品" }, { status: 400 });
+  }
+
+  const action = String(body.action || "");
+  if (action === "category" && body.value) {
+    await db.update(photos).set({ category: String(body.value) }).where(inArray(photos.id, ids));
+  } else if (action === "featured") {
+    await db.update(photos).set({ featured: Boolean(body.value) }).where(inArray(photos.id, ids));
+  } else if (action === "collection" && Number(body.value) > 0) {
+    const colId = Number(body.value);
+    for (const pid of ids) {
+      await db
+        .insert(collectionPhotos)
+        .values({ collectionId: colId, photoId: pid, sortOrder: 0 })
+        .onConflictDoNothing();
+    }
+  } else if (action === "delete") {
+    await db.delete(collectionPhotos).where(inArray(collectionPhotos.photoId, ids));
+    await db.delete(photos).where(inArray(photos.id, ids));
+  }
+
+  return NextResponse.json({ ok: true, count: ids.length });
 }

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import * as maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { Aperture, ArrowLeft, Compass, Globe2, MapPin, Minus, Plus } from "lucide-react";
@@ -9,6 +10,7 @@ import { SiteHeader } from "./SiteHeader";
 import { SiteFooter } from "./SiteFooter";
 import { Lightbox } from "./Lightbox";
 import { GalleryImage } from "./GalleryImage";
+import { loadCompliantMapStyle } from "@/lib/compliant-map-style";
 import { usePreferences } from "./PreferencesProvider";
 
 interface MapClientProps {
@@ -26,18 +28,17 @@ interface PlaceGroup {
   photos: Photo[];
 }
 
-function getMapStyleUrl(mode: "dark" | "light"): string {
-  return mode === "dark"
-    ? "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json"
-    : "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json";
-}
-
 function formatCoord(lat: number, lng: number): string {
   return `${Math.abs(lat).toFixed(2)}°${lat >= 0 ? "N" : "S"}, ${Math.abs(lng).toFixed(2)}°${lng >= 0 ? "E" : "W"}`;
 }
 
 export function MapClient({ photos, collectionsMap, settings }: MapClientProps) {
   const { locale, theme, pick } = usePreferences();
+  const searchParams = useSearchParams();
+  const focusPhotoId = Number(searchParams.get("focus") || 0);
+  const qLat = searchParams.get("lat");
+  const qLng = searchParams.get("lng");
+  const qZoom = searchParams.get("z");
 
   const geoPhotos = useMemo(
     () => photos.filter((p): p is Photo & { lat: number; lng: number } => p.lat !== null && p.lng !== null),
@@ -73,37 +74,65 @@ export function MapClient({ photos, collectionsMap, settings }: MapClientProps) 
 
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
-  const markersRef = useRef<Map<string, { marker: maplibregl.Marker; el: HTMLButtonElement }>>(new Map());
+  const markersRef = useRef<Map<string, { marker: maplibregl.Marker; wrap: HTMLDivElement; btn: HTMLButtonElement }>>(new Map());
+  const styleKeyRef = useRef("");
 
   const selectedPlace = useMemo(
     () => places.find((p) => p.id === selectedId) ?? null,
     [places, selectedId]
   );
 
-  // Initialize MapLibre GL
+  // Initialize MapLibre GL with Chinese-compliant cartographic style
   useEffect(() => {
     if (!mapContainerRef.current || mapRef.current) return;
+    let disposed = false;
 
     maplibregl.setWorkerUrl("/maplibre-gl-worker.js");
 
+    const initCenter: [number, number] =
+      qLng !== null && qLat !== null ? [Number(qLng), Number(qLat)] : [52, 30];
+    const initZoom = qZoom !== null ? Number(qZoom) : 1.65;
+
     const map = new maplibregl.Map({
       container: mapContainerRef.current,
-      style: getMapStyleUrl(theme),
-      center: [16, 34],
-      zoom: 1.75,
+      style: { version: 8, sources: {}, layers: [{ id: "bg", type: "background", paint: { "background-color": theme === "dark" ? "#0d0f14" : "#f1f5f9" } }] },
+      center: initCenter,
+      zoom: initZoom,
       minZoom: 1.2,
       maxZoom: 15,
       attributionControl: false,
       renderWorldCopies: false,
     });
 
+    styleKeyRef.current = `${theme}:${locale}`;
+    loadCompliantMapStyle(theme, locale)
+      .then((style) => {
+        if (!disposed) map.setStyle(style);
+      })
+      .catch(() => {});
+
     map.on("click", () => {
       setSelectedId(null);
     });
 
+    const ro = new ResizeObserver(() => {
+      map.resize();
+    });
+    ro.observe(mapContainerRef.current);
+
     mapRef.current = map;
 
+    if (focusPhotoId > 0) {
+      const targetGroup = places.find((g) => g.photos.some((p) => p.id === focusPhotoId));
+      if (targetGroup) {
+        setSelectedId(targetGroup.id);
+        map.jumpTo({ center: [targetGroup.lng, targetGroup.lat], zoom: 7.5 });
+      }
+    }
+
     return () => {
+      disposed = true;
+      ro.disconnect();
       markersRef.current.forEach(({ marker }) => marker.remove());
       markersRef.current.clear();
       map.remove();
@@ -112,14 +141,21 @@ export function MapClient({ photos, collectionsMap, settings }: MapClientProps) 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Sync basemap tiles when Dark / Light theme toggles
+  // Sync compliant basemap style when Dark/Light theme or Zh/En locale toggles
   useEffect(() => {
+    const nextKey = `${theme}:${locale}`;
+    if (styleKeyRef.current === nextKey || !mapRef.current) return;
+    styleKeyRef.current = nextKey;
     const map = mapRef.current;
-    if (!map) return;
-    map.setStyle(getMapStyleUrl(theme));
-  }, [theme]);
+    loadCompliantMapStyle(theme, locale)
+      .then((style) => {
+        if (mapRef.current === map) map.setStyle(style);
+      })
+      .catch(() => {});
+  }, [locale, theme]);
 
   // Mount / sync custom minimalist photo markers
+  // IMPORTANT: Never set `position` or `transform` on `wrap` — MapLibre owns `wrap`'s absolute position & translate3d!
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
@@ -129,23 +165,25 @@ export function MapClient({ photos, collectionsMap, settings }: MapClientProps) 
 
     places.forEach((group) => {
       const cover = group.photos[0];
+      const wrap = document.createElement("div");
+
       const btn = document.createElement("button");
       btn.type = "button";
       btn.setAttribute("aria-label", group.location);
       btn.style.cssText =
-        "position:relative;width:40px;height:40px;padding:0;border-radius:4px;cursor:pointer;background:#14161d;transition:transform 200ms cubic-bezier(0.22,1,0.36,1),box-shadow 200ms ease;";
+        "position:relative;display:block;width:40px;height:40px;padding:0;border-radius:4px;cursor:pointer;background:#14161d;transition:transform 200ms cubic-bezier(0.22,1,0.36,1),box-shadow 200ms ease;";
 
       const img = document.createElement("img");
       img.src = cover.url;
       img.alt = "";
-      img.style.cssText = "width:100%;height:100%;object-fit:cover;border-radius:3px;display:block;";
+      img.style.cssText = "width:100%;height:100%;object-fit:cover;border-radius:3px;display:block;pointer-events:none;";
       btn.appendChild(img);
 
       if (group.photos.length > 1) {
         const badge = document.createElement("span");
         badge.textContent = String(group.photos.length);
         badge.style.cssText =
-          "position:absolute;top:-6px;right:-6px;min-width:17px;height:17px;padding:0 4px;border-radius:999px;font-size:10px;font-weight:600;line-height:17px;text-align:center;background:#f4f5f7;color:#0a0b0e;box-shadow:0 2px 6px rgba(0,0,0,0.4);";
+          "position:absolute;top:-6px;right:-6px;min-width:17px;height:17px;padding:0 4px;border-radius:999px;font-size:10px;font-weight:600;line-height:17px;text-align:center;background:#f4f5f7;color:#0a0b0e;box-shadow:0 2px 6px rgba(0,0,0,0.4);pointer-events:none;";
         btn.appendChild(badge);
       }
 
@@ -160,22 +198,24 @@ export function MapClient({ photos, collectionsMap, settings }: MapClientProps) 
         });
       });
 
-      const marker = new maplibregl.Marker({ element: btn, anchor: "center" })
+      wrap.appendChild(btn);
+
+      const marker = new maplibregl.Marker({ element: wrap, anchor: "center" })
         .setLngLat([group.lng, group.lat])
         .addTo(map);
 
-      markersRef.current.set(group.id, { marker, el: btn });
+      markersRef.current.set(group.id, { marker, wrap, btn });
     });
   }, [places]);
 
-  // Highlight active marker ring
+  // Highlight active marker ring on inner `btn` (never overwriting `wrap.style.transform`!)
   useEffect(() => {
     const isDark = theme === "dark";
-    markersRef.current.forEach(({ el }, id) => {
+    markersRef.current.forEach(({ wrap, btn }, id) => {
       const active = id === selectedId;
-      el.style.zIndex = active ? "20" : "1";
-      el.style.transform = active ? "scale(1.18)" : "scale(1)";
-      el.style.boxShadow = active
+      wrap.style.zIndex = active ? "20" : "1";
+      btn.style.transform = active ? "scale(1.18)" : "scale(1)";
+      btn.style.boxShadow = active
         ? isDark
           ? "0 0 0 2px #f4f5f7, 0 10px 24px rgba(0,0,0,0.65)"
           : "0 0 0 2px #111827, 0 10px 24px rgba(15,23,42,0.28)"
@@ -198,8 +238,8 @@ export function MapClient({ photos, collectionsMap, settings }: MapClientProps) 
   const resetWorldView = () => {
     setSelectedId(null);
     mapRef.current?.flyTo({
-      center: [16, 34],
-      zoom: 1.75,
+      center: [52, 30],
+      zoom: 1.65,
       duration: 850,
       essential: true,
     });
@@ -294,6 +334,7 @@ export function MapClient({ photos, collectionsMap, settings }: MapClientProps) 
                         src={photo.url}
                         alt={pTitle}
                         ambient={photo.ambient}
+                        blurData={photo.blurData}
                         aspectRatio={`${photo.width || 1600} / ${photo.height || 1068}`}
                         className="w-full"
                       />

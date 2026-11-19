@@ -15,6 +15,7 @@ export default async function AboutPage() {
   return (
     <AboutClient
       settings={settings}
+      photos={photos}
       stats={{
         photoCount: photos.length,
         collectionCount: collections.length,

@@ -2,12 +2,14 @@
 
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { Maximize2 } from "lucide-react";
+import { usePreferences } from "./PreferencesProvider";
 
 interface GalleryImageProps {
   photoId?: number;
   src: string;
   alt: string;
   ambient?: string;
+  blurData?: string;
   aspectRatio?: string;
   className?: string;
   imgClassName?: string;
@@ -20,12 +22,14 @@ export function GalleryImage({
   src,
   alt,
   ambient = "#181a20",
+  blurData,
   aspectRatio,
   className = "",
   imgClassName = "",
   style,
   showLoupe = true,
 }: GalleryImageProps) {
+  const { copyrightGuard } = usePreferences();
   const imgRef = useRef<HTMLImageElement>(null);
   const [loaded, setLoaded] = useState(false);
 
@@ -58,17 +62,32 @@ export function GalleryImage({
       )}
 
       <div
-        style={{ backgroundColor: loaded ? "transparent" : `${ambient}33` }}
+        style={{ backgroundColor: loaded ? "transparent" : `${ambient}44` }}
+        onContextMenu={(e) => {
+          if (copyrightGuard) e.preventDefault();
+        }}
         className="photo-frame relative h-full w-full overflow-hidden"
       >
+        {/* True 24px Color LQIP Blur-Up Underlay */}
+        {blurData && (
+          <div
+            aria-hidden="true"
+            style={{ backgroundImage: `url(${blurData})` }}
+            className={`pointer-events-none absolute inset-0 bg-cover bg-center blur-lg scale-110 transition-opacity duration-500 ${
+              loaded ? "opacity-0" : "opacity-100"
+            }`}
+          />
+        )}
+
         <img
           ref={imgRef}
           data-morph-photo-id={photoId}
           src={src}
           alt={alt}
+          draggable={!copyrightGuard}
           onLoad={() => setLoaded(true)}
-          className={`block w-full h-full object-cover transition-[scale,transform,opacity,filter] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] ${
-            loaded ? "opacity-100 blur-0 scale-100" : "opacity-0 blur-sm scale-[1.02]"
+          className={`relative block w-full h-full object-cover transition-[scale,transform,opacity,filter] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+            loaded ? "opacity-100 blur-0 scale-100" : "opacity-0 blur-xs scale-[1.015]"
           } group-hover:scale-[1.035] group-hover/img:scale-[1.035] ${imgClassName}`}
         />
 

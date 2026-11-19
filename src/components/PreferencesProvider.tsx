@@ -16,6 +16,7 @@ const CATEGORY_LABELS: Record<string, { zh: string; en: string }> = {
 interface PreferencesContextValue {
   locale: Locale;
   theme: Theme;
+  copyrightGuard: boolean;
   toggleLocale: () => void;
   toggleTheme: () => void;
   pick: (zh: string, en?: string | null) => string;
@@ -24,7 +25,13 @@ interface PreferencesContextValue {
 
 const PreferencesContext = createContext<PreferencesContextValue | null>(null);
 
-export function PreferencesProvider({ children }: { children: ReactNode }) {
+export function PreferencesProvider({
+  children,
+  copyrightGuard = false,
+}: {
+  children: ReactNode;
+  copyrightGuard?: boolean;
+}) {
   const [theme, setTheme] = useState<Theme>("dark");
   const [locale, setLocale] = useState<Locale>("zh");
 
@@ -87,7 +94,7 @@ export function PreferencesProvider({ children }: { children: ReactNode }) {
   );
 
   return (
-    <PreferencesContext.Provider value={{ locale, theme, toggleLocale, toggleTheme, pick, categoryLabel }}>
+    <PreferencesContext.Provider value={{ locale, theme, copyrightGuard, toggleLocale, toggleTheme, pick, categoryLabel }}>
       {children}
     </PreferencesContext.Provider>
   );

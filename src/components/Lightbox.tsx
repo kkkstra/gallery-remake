@@ -25,6 +25,7 @@ import {
   Pause,
   Play,
   ScanSearch,
+  Share2,
   Tag,
   Timer,
   X,
@@ -34,6 +35,7 @@ import {
 import type { Photo } from "@/lib/db/schema";
 import { ViewLink } from "./ViewLink";
 import { PrintCardModal } from "./PrintCardModal";
+import { PhotoMiniMap } from "./PhotoMiniMap";
 import { usePreferences } from "./PreferencesProvider";
 
 const LOUPE_SIZE = 204;
@@ -129,7 +131,7 @@ export function Lightbox({
   onClose,
   onChangeIndex,
 }: LightboxProps) {
-  const { locale, theme, pick, categoryLabel } = usePreferences();
+  const { locale, theme, copyrightGuard, pick, categoryLabel } = usePreferences();
   const [scale, setScale] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [dragging, setDragging] = useState(false);
@@ -150,6 +152,8 @@ export function Lightbox({
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [closing, setClosing] = useState(false);
   const [copiedHex, setCopiedHex] = useState<string | null>(null);
+  const [copiedShare, setCopiedShare] = useState(false);
+  const [prevPhotoUrl, setPrevPhotoUrl] = useState<string | null>(null);
   const [hist, setHist] = useState<HistogramData | null>(null);
 
   const rootRef = useRef<HTMLDivElement>(null);
@@ -159,8 +163,19 @@ export function Lightbox({
   const filmstripRef = useRef<HTMLDivElement>(null);
   const [filmScroll, setFilmScroll] = useState({ canLeft: false, canRight: false, hasOverflow: false });
   const lastPointerRef = useRef<{ x: number; y: number } | null>(null);
+  const lastLoadedUrlRef = useRef<string | null>(null);
   const wasOpenRef = useRef(false);
   const dragStartRef = useRef<{ x: number; y: number; panX: number; panY: number; moved: boolean } | null>(null);
+  const pointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
+  const pinchRef = useRef<{
+    dist0: number;
+    scale0: number;
+    midX0: number;
+    midY0: number;
+    panX0: number;
+    panY0: number;
+  } | null>(null);
+  const lastTapRef = useRef<{ time: number; x: number; y: number }>({ time: 0, x: 0, y: 0 });
 
   const isDark = theme === "dark";
   const photo = activeIndex !== null ? photos[activeIndex] : null;
@@ -224,14 +239,42 @@ export function Lightbox({
   useEffect(() => {
     resetZoom();
     setLoupePos(null);
-    if (activeIndex === null) return;
+    pointersRef.current.clear();
+    pinchRef.current = null;
+    if (activeIndex === null) {
+      lastLoadedUrlRef.current = null;
+      setPrevPhotoUrl(null);
+      return;
+    }
+
+    const nextUrl = photos[activeIndex]?.url;
+    if (lastLoadedUrlRef.current && lastLoadedUrlRef.current !== nextUrl) {
+      setPrevPhotoUrl(lastLoadedUrlRef.current);
+    }
+
+    // Silently warm up adjacent images (±1, +2) so switching has zero blank flash
+    if (photos.length > 1) {
+      const offsets = [-1, 1, 2];
+      offsets.forEach((off) => {
+        const target = photos[(activeIndex + off + photos.length) % photos.length];
+        if (target?.url) {
+          const pre = new Image();
+          pre.src = target.url;
+        }
+      });
+    }
+
     const id = requestAnimationFrame(() => {
+      if (mainImgRef.current?.complete && nextUrl) {
+        lastLoadedUrlRef.current = nextUrl;
+        setPrevPhotoUrl(null);
+      }
       const activeThumb = filmstripRef.current?.querySelector<HTMLElement>('[data-film-active="true"]');
       activeThumb?.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
       syncFilmScroll();
     });
     return () => cancelAnimationFrame(id);
-  }, [activeIndex, resetZoom, syncFilmScroll]);
+  }, [activeIndex, photos, resetZoom, syncFilmScroll]);
 
   useEffect(() => {
     if (activeIndex === null) return;
@@ -471,10 +514,35 @@ export function Lightbox({
     });
   };
 
+  const zoomToPoint = (clientX: number, clientY: number, targetScale: number, imgEl: HTMLImageElement) => {
+    const r = imgEl.getBoundingClientRect();
+    const ox = clientX - (r.left + r.width / 2);
+    const oy = clientY - (r.top + r.height / 2);
+    setScale(targetScale);
+    setPan({ x: -ox * (targetScale - 1), y: -oy * (targetScale - 1) });
+  };
+
   const handlePointerDown = (e: React.PointerEvent<HTMLImageElement>) => {
-    if (e.button !== 0) return;
+    if (e.pointerType === "mouse" && e.button !== 0) return;
     e.preventDefault();
     e.currentTarget.setPointerCapture(e.pointerId);
+    pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+    if (pointersRef.current.size === 2) {
+      const [p1, p2] = Array.from(pointersRef.current.values());
+      dragStartRef.current = null;
+      setDragging(true);
+      pinchRef.current = {
+        dist0: Math.max(20, Math.hypot(p2.x - p1.x, p2.y - p1.y)),
+        scale0: scale,
+        midX0: (p1.x + p2.x) / 2,
+        midY0: (p1.y + p2.y) / 2,
+        panX0: pan.x,
+        panY0: pan.y,
+      };
+      return;
+    }
+
     dragStartRef.current = {
       x: e.clientX,
       y: e.clientY,
@@ -486,6 +554,25 @@ export function Lightbox({
   };
 
   const handlePointerMove = (e: React.PointerEvent<HTMLImageElement>) => {
+    if (pointersRef.current.has(e.pointerId)) {
+      pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    }
+
+    if (pointersRef.current.size >= 2 && pinchRef.current) {
+      const [p1, p2] = Array.from(pointersRef.current.values());
+      const dist = Math.max(12, Math.hypot(p2.x - p1.x, p2.y - p1.y));
+      const midX = (p1.x + p2.x) / 2;
+      const midY = (p1.y + p2.y) / 2;
+      const nextScale = Math.min(4, Math.max(0.92, pinchRef.current.scale0 * (dist / pinchRef.current.dist0)));
+      const ratio = nextScale / pinchRef.current.scale0;
+      setScale(nextScale);
+      setPan({
+        x: pinchRef.current.panX0 * ratio + (midX - pinchRef.current.midX0),
+        y: pinchRef.current.panY0 * ratio + (midY - pinchRef.current.midY0),
+      });
+      return;
+    }
+
     const start = dragStartRef.current;
     if (!start) return;
     const dx = e.clientX - start.x;
@@ -497,12 +584,29 @@ export function Lightbox({
   };
 
   const handlePointerUp = (e: React.PointerEvent<HTMLImageElement>) => {
-    const start = dragStartRef.current;
-    dragStartRef.current = null;
-    setDragging(false);
+    pointersRef.current.delete(e.pointerId);
     if (e.currentTarget.hasPointerCapture(e.pointerId)) {
       e.currentTarget.releasePointerCapture(e.pointerId);
     }
+
+    if (pinchRef.current) {
+      if (pointersRef.current.size < 2) {
+        pinchRef.current = null;
+        setDragging(false);
+        setScale((s) => {
+          if (s <= 1.04) {
+            setPan({ x: 0, y: 0 });
+            return 1;
+          }
+          return Number(s.toFixed(2));
+        });
+      }
+      return;
+    }
+
+    const start = dragStartRef.current;
+    dragStartRef.current = null;
+    setDragging(false);
     if (!start) return;
 
     if (start.moved && !isZoomed && !loupeEnabled) {
@@ -524,8 +628,20 @@ export function Lightbox({
 
     if (!start.moved) {
       if (loupeEnabled) return;
+      if (e.pointerType === "touch") {
+        const now = Date.now();
+        const prevTap = lastTapRef.current;
+        if (now - prevTap.time < 300 && Math.hypot(e.clientX - prevTap.x, e.clientY - prevTap.y) < 36) {
+          lastTapRef.current = { time: 0, x: 0, y: 0 };
+          if (isZoomed) resetZoom();
+          else zoomToPoint(e.clientX, e.clientY, 2.4, e.currentTarget);
+        } else {
+          lastTapRef.current = { time: now, x: e.clientX, y: e.clientY };
+        }
+        return;
+      }
       if (isZoomed) resetZoom();
-      else setScale(2.2);
+      else zoomToPoint(e.clientX, e.clientY, 2.2, e.currentTarget);
     }
   };
 
@@ -545,6 +661,22 @@ export function Lightbox({
     navigator.clipboard?.writeText(hex).catch(() => {});
     setCopiedHex(hex);
     setTimeout(() => setCopiedHex(null), 1500);
+  };
+
+  const handleSharePhoto = async () => {
+    if (!photo) return;
+    const shareUrl = `${window.location.origin}/photo/${photo.id}`;
+    if (typeof navigator.share === "function" && window.matchMedia("(max-width: 768px)").matches) {
+      try {
+        await navigator.share({ title: pick(photo.title, photo.titleEn), url: shareUrl });
+        return;
+      } catch {
+        // Fallback to copy
+      }
+    }
+    navigator.clipboard?.writeText(shareUrl).catch(() => {});
+    setCopiedShare(true);
+    setTimeout(() => setCopiedShare(false), 1800);
   };
 
   const belongingCols = collectionsMap?.[photo.id] ?? [];
@@ -785,18 +917,37 @@ export function Lightbox({
           {/* Shared-Element Morph Wrapper + Optional Museum Acid-Free White Mat */}
           <div
             ref={morphTargetRef}
+            onContextMenu={(e) => {
+              if (copyrightGuard) e.preventDefault();
+            }}
             className={`relative z-10 flex max-h-full max-w-full items-center justify-center transition-[padding,background-color,box-shadow] duration-300 ${
               matted && !isZoomed
                 ? "bg-[#F7F6F1] p-3.5 sm:p-9 shadow-[0_24px_64px_rgba(0,0,0,0.45)] ring-1 ring-black/10"
                 : ""
             }`}
           >
+            {/* Zero-Flash Previous Frame Underlay while Next Image Decodes */}
+            {prevPhotoUrl && !isZoomed && (
+              <img
+                src={prevPhotoUrl}
+                alt=""
+                aria-hidden="true"
+                className={`pointer-events-none absolute inset-0 m-auto object-contain opacity-65 blur-[2px] ${
+                  matted ? "max-h-[66dvh] max-w-[86vw] sm:max-h-[64dvh] sm:max-w-[74vw]" : "max-h-[76dvh] sm:max-h-[75dvh] max-w-full"
+                }`}
+              />
+            )}
+
             <img
               ref={mainImgRef}
               key={photo.id}
               src={photo.url}
               alt={title}
               draggable={false}
+              onLoad={() => {
+                lastLoadedUrlRef.current = photo.url;
+                setPrevPhotoUrl(null);
+              }}
               onPointerDown={handlePointerDown}
               onPointerMove={handlePointerMove}
               onPointerUp={handlePointerUp}
@@ -1152,20 +1303,32 @@ export function Lightbox({
                   </dd>
                 </div>
               </dl>
+
+              {photo.lat !== null && photo.lng !== null && (
+                <PhotoMiniMap
+                  photoId={photo.id}
+                  lat={photo.lat}
+                  lng={photo.lng}
+                  photoUrl={photo.url}
+                  onNavigate={onClose}
+                />
+              )}
             </div>
           </div>
 
           <div className="flex items-center justify-between border-t border-[var(--border)] pt-4 text-xs text-[var(--fg-muted)]">
             <div className="flex items-center gap-4">
-              <a
-                href={photo.url}
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex items-center gap-1.5 text-sm text-[var(--fg)] hover:opacity-75 transition"
-              >
-                <ExternalLink className="h-4 w-4" />
-                <span>{locale === "en" ? "Original" : "原图"}</span>
-              </a>
+              {!copyrightGuard && (
+                <a
+                  href={photo.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1.5 text-sm text-[var(--fg)] hover:opacity-75 transition"
+                >
+                  <ExternalLink className="h-4 w-4" />
+                  <span>{locale === "en" ? "Original" : "原图"}</span>
+                </a>
+              )}
               <button
                 type="button"
                 onClick={() => setShowPrintModal(true)}
@@ -1174,8 +1337,30 @@ export function Lightbox({
                 <Download className="h-4 w-4" />
                 <span>{locale === "en" ? "Print" : "签名框"}</span>
               </button>
+              <button
+                type="button"
+                onClick={handleSharePhoto}
+                className="inline-flex items-center gap-1.5 text-sm text-[var(--fg)] hover:opacity-75 transition cursor-pointer"
+              >
+                {copiedShare ? <Check className="h-4 w-4" /> : <Share2 className="h-4 w-4" />}
+                <span>
+                  {copiedShare
+                    ? locale === "en"
+                      ? "Copied"
+                      : "已复制"
+                    : locale === "en"
+                    ? "Share"
+                    : "分享"}
+                </span>
+              </button>
             </div>
-            <span>L · P · M · ESC</span>
+            <ViewLink
+              href={`/photo/${photo.id}`}
+              onClick={onClose}
+              className="hover:text-[var(--fg)] transition"
+            >
+              #{String(photo.id).padStart(2, "0")}
+            </ViewLink>
           </div>
         </aside>
       </div>

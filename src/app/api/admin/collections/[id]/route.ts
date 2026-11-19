@@ -26,6 +26,7 @@ export async function PATCH(
       descriptionEn: String(body.descriptionEn || ""),
       coverUrl: String(body.coverUrl || ""),
       period: String(body.period || ""),
+      ...(typeof body.blocksJson === "string" ? { blocksJson: body.blocksJson } : {}),
       sortOrder: Number(body.sortOrder) || 0,
     })
     .where(eq(collections.id, id));

@@ -13,6 +13,12 @@ export async function getAllPhotos(): Promise<Photo[]> {
   return db.select().from(photos).orderBy(asc(photos.sortOrder), desc(photos.id));
 }
 
+export async function getPhotoById(id: number): Promise<Photo | null> {
+  await ensureDb();
+  const row = await db.select().from(photos).where(eq(photos.id, id)).get();
+  return row ?? null;
+}
+
 export async function getFeaturedPhotos(): Promise<Photo[]> {
   const all = await getAllPhotos();
   const featured = all.filter((p) => p.featured);

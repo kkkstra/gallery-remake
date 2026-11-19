@@ -10,6 +10,7 @@ export const photos = sqliteTable("photos", {
   width: integer("width").notNull().default(1600),
   height: integer("height").notNull().default(1068),
   ambient: text("ambient").notNull().default("#1e2024"),
+  blurData: text("blur_data").notNull().default(""),
   category: text("category").notNull().default("landscape"),
   featured: integer("featured", { mode: "boolean" }).notNull().default(false),
   sortOrder: integer("sort_order").notNull().default(0),
@@ -36,6 +37,7 @@ export const collections = sqliteTable("collections", {
   descriptionEn: text("description_en").notNull().default(""),
   coverUrl: text("cover_url").notNull().default(""),
   period: text("period").notNull().default(""),
+  blocksJson: text("blocks_json").notNull().default(""),
   sortOrder: integer("sort_order").notNull().default(0),
 });
 

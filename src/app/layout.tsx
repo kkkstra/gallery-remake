@@ -1,12 +1,18 @@
 import type { Metadata, Viewport } from "next";
 import "@fontsource-variable/plus-jakarta-sans";
 import "./globals.css";
+import { getSiteSettings } from "@/lib/queries";
 import { PreferencesProvider } from "@/components/PreferencesProvider";
 import { CommandPalette } from "@/components/CommandPalette";
 
 export const metadata: Metadata = {
   title: "林远 · 个人摄影作品集 | Lin Yuan Photography",
   description: "记录自然尺幅、城市暮色与行旅瞬间。",
+  alternates: {
+    types: {
+      "application/rss+xml": "/feed.xml",
+    },
+  },
 };
 
 export const viewport: Viewport = {
@@ -27,7 +33,10 @@ const themeInitScript = `
 })();
 `;
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  const settings = await getSiteSettings().catch(() => ({} as Record<string, string>));
+  const copyrightGuard = settings.copyrightGuard === "true";
+
   return (
     <html lang="zh-CN" suppressHydrationWarning>
       <head>
@@ -35,7 +44,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       </head>
       <body className="min-h-dvh selection:bg-zinc-800 selection:text-white">
         <div className="ambient-grain" aria-hidden="true" />
-        <PreferencesProvider>
+        <PreferencesProvider copyrightGuard={copyrightGuard}>
           {children}
           <CommandPalette />
         </PreferencesProvider>

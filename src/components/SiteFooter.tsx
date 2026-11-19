@@ -1,6 +1,6 @@
 "use client";
 
-import { Mail, MapPin, Settings, User } from "lucide-react";
+import { Mail, MapPin, Rss, Settings, User } from "lucide-react";
 import { ViewLink } from "./ViewLink";
 import { usePreferences } from "./PreferencesProvider";
 
@@ -40,6 +40,15 @@ export function SiteFooter({ settings }: SiteFooterProps) {
               <span>{settings.email}</span>
             </a>
           )}
+          <a
+            href="/feed.xml"
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1 hover:text-[var(--fg)] transition"
+          >
+            <Rss className="h-3.5 w-3.5" />
+            <span>RSS</span>
+          </a>
           <ViewLink href="/admin" className="inline-flex items-center gap-1 hover:text-[var(--fg)] transition">
             <Settings className="h-3.5 w-3.5" />
             <span>{locale === "en" ? "Admin" : "后台"}</span>

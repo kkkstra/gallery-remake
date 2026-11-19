@@ -4,6 +4,7 @@ import { isAdminAuthenticated } from "@/lib/auth";
 import { db, ensureDb } from "@/lib/db";
 import { collectionPhotos, photos } from "@/lib/db/schema";
 import { extractExifFromBuffer } from "@/lib/exif";
+import { generateBlurDataUrl } from "@/lib/lqip";
 import { storeUploadedFile } from "@/lib/storage";
 
 export async function POST(req: Request) {
@@ -21,7 +22,10 @@ export async function POST(req: Request) {
   const arrayBuffer = await file.arrayBuffer();
   const buffer = Buffer.from(arrayBuffer);
 
-  const url = await storeUploadedFile(buffer, file.name, file.type);
+  const [url, blurData] = await Promise.all([
+    storeUploadedFile(buffer, file.name, file.type),
+    generateBlurDataUrl(buffer),
+  ]);
   const exif = extractExifFromBuffer(buffer);
 
   const clientWidth = Number(form.get("width") || 0) || undefined;
@@ -44,6 +48,7 @@ export async function POST(req: Request) {
       width: exif.width || clientWidth || 1600,
       height: exif.height || clientHeight || 1068,
       ambient,
+      blurData,
       category,
       featured,
       sortOrder: 0,
