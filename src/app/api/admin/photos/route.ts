@@ -3,9 +3,43 @@ import { eq, inArray } from "drizzle-orm";
 import { isAdminAuthenticated } from "@/lib/auth";
 import { db, ensureDb } from "@/lib/db";
 import { collectionPhotos, photos } from "@/lib/db/schema";
+import { getAllPhotos } from "@/lib/queries";
+
+export async function GET(req: Request) {
+  if (!(await isAdminAuthenticated(req))) {
+    return NextResponse.json({ error: "未授权" }, { status: 401 });
+  }
+  const { searchParams } = new URL(req.url);
+  const category = searchParams.get("category");
+  const hiddenParam = searchParams.get("hidden");
+  const featuredParam = searchParams.get("featured");
+  const q = (searchParams.get("q") || "").trim().toLowerCase();
+  const limit = Number(searchParams.get("limit") || 0);
+
+  let list = await getAllPhotos({ includeHidden: true });
+  if (category) list = list.filter((p) => p.category === category);
+  if (hiddenParam === "true" || hiddenParam === "false") {
+    const want = hiddenParam === "true";
+    list = list.filter((p) => Boolean(p.hidden) === want);
+  }
+  if (featuredParam === "true" || featuredParam === "false") {
+    const want = featuredParam === "true";
+    list = list.filter((p) => Boolean(p.featured) === want);
+  }
+  if (q) {
+    list = list.filter((p) =>
+      `${p.title} ${p.titleEn} ${p.location} ${p.locationEn} ${p.camera} ${p.lens} ${p.description}`
+        .toLowerCase()
+        .includes(q)
+    );
+  }
+  if (limit > 0) list = list.slice(0, limit);
+
+  return NextResponse.json({ total: list.length, photos: list });
+}
 
 export async function POST(req: Request) {
-  if (!(await isAdminAuthenticated())) {
+  if (!(await isAdminAuthenticated(req))) {
     return NextResponse.json({ error: "未授权" }, { status: 401 });
   }
   await ensureDb();
@@ -28,6 +62,7 @@ export async function POST(req: Request) {
       blurData: String(body.blurData || ""),
       category: String(body.category || "landscape"),
       featured: Boolean(body.featured),
+      hidden: Boolean(body.hidden),
       sortOrder: Number(body.sortOrder) || 0,
       takenAt: String(body.takenAt || ""),
       location: String(body.location || ""),
@@ -92,6 +127,8 @@ export async function PATCH(req: Request) {
     await db.update(photos).set({ category: String(body.value) }).where(inArray(photos.id, ids));
   } else if (action === "featured") {
     await db.update(photos).set({ featured: Boolean(body.value) }).where(inArray(photos.id, ids));
+  } else if (action === "hidden") {
+    await db.update(photos).set({ hidden: Boolean(body.value) }).where(inArray(photos.id, ids));
   } else if (action === "collection" && Number(body.value) > 0) {
     const colId = Number(body.value);
     for (const pid of ids) {

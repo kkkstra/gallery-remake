@@ -11,13 +11,18 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
+  Copy,
+  Eye,
+  EyeOff,
   ExternalLink,
   GripVertical,
   Images,
+  KeyRound,
   Layers,
   LayoutGrid,
   Link2,
   LogOut,
+  Map as MapIcon,
   MapPin,
   Moon,
   Pencil,
@@ -28,6 +33,7 @@ import {
   Settings,
   Star,
   Sun,
+  Terminal,
   Trash2,
   Upload,
   X,
@@ -42,6 +48,7 @@ import {
 } from "@/lib/monograph";
 import type { AboutFocusItem, AboutMilestoneItem } from "./AboutClient";
 import { extractExifFromBuffer } from "@/lib/exif";
+import { AdminMapPicker } from "./AdminMapPicker";
 import { CameraIllustration, LensIllustration } from "./GearIllustrations";
 import { usePreferences } from "./PreferencesProvider";
 
@@ -159,7 +166,16 @@ export function AdminClient({
   const [uploadProgress, setUploadProgress] = useState("");
   const [batchCategory, setBatchCategory] = useState("landscape");
   const [batchFeatured, setBatchFeatured] = useState(true);
+  const [batchHidden, setBatchHidden] = useState(false);
   const [batchColId, setBatchColId] = useState("0");
+  const [showUploadMap, setShowUploadMap] = useState(false);
+  const [batchGeo, setBatchGeo] = useState<{
+    location: string;
+    locationEn: string;
+    lat: number | null;
+    lng: number | null;
+    overrideExif: boolean;
+  }>({ location: "", locationEn: "", lat: null, lng: null, overrideExif: false });
   const [extPhoto, setExtPhoto] = useState({
     title: "",
     url: "",
@@ -173,8 +189,10 @@ export function AdminClient({
   // Live Right Inspector state
   const [editingPhoto, setEditingPhoto] = useState<Photo | null>(null);
   const [editingColIds, setEditingColIds] = useState<number[]>([]);
+  const [showInspectorMap, setShowInspectorMap] = useState(false);
   const [geocoding, setGeocoding] = useState(false);
   const [savingPhoto, setSavingPhoto] = useState(false);
+  const colEditorRef = useRef<HTMLDivElement>(null);
 
   // Series & Monograph Workbench state
   const [editingCol, setEditingCol] = useState<{
@@ -272,11 +290,13 @@ export function AdminClient({
     const q = searchQuery.trim().toLowerCase();
     return photoList.filter((p) => {
       if (quickFilter === "featured" && !p.featured) return false;
+      if (quickFilter === "hidden" && !p.hidden) return false;
       if (quickFilter === "nogps" && p.lat !== null && p.lng !== null) return false;
       if (quickFilter === "unassigned" && assignedPhotoIds.has(p.id)) return false;
       if (
         quickFilter !== "all" &&
         quickFilter !== "featured" &&
+        quickFilter !== "hidden" &&
         quickFilter !== "nogps" &&
         quickFilter !== "unassigned" &&
         p.category !== quickFilter
@@ -323,6 +343,10 @@ export function AdminClient({
                 const ab = await file.arrayBuffer();
                 const exif = extractExifFromBuffer(ab);
                 const rawTitle = file.name.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " ").trim();
+                const finalLat =
+                  batchGeo.overrideExif && batchGeo.lat !== null ? batchGeo.lat : exif.lat ?? batchGeo.lat;
+                const finalLng =
+                  batchGeo.overrideExif && batchGeo.lng !== null ? batchGeo.lng : exif.lng ?? batchGeo.lng;
                 await fetch("/api/admin/photos", {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
@@ -335,9 +359,12 @@ export function AdminClient({
                     blurData: meta.blurData,
                     category: batchCategory,
                     featured: batchFeatured,
+                    hidden: batchHidden,
                     takenAt: exif.takenAt,
-                    lat: exif.lat,
-                    lng: exif.lng,
+                    location: batchGeo.location,
+                    locationEn: batchGeo.locationEn,
+                    lat: finalLat,
+                    lng: finalLng,
                     camera: exif.camera,
                     lens: exif.lens,
                     focalMm: exif.focalMm,
@@ -363,6 +390,12 @@ export function AdminClient({
           fd.append("ambient", meta.ambient);
           fd.append("category", batchCategory);
           fd.append("featured", String(batchFeatured));
+          fd.append("hidden", String(batchHidden));
+          if (batchGeo.location) fd.append("location", batchGeo.location);
+          if (batchGeo.locationEn) fd.append("locationEn", batchGeo.locationEn);
+          if (batchGeo.lat !== null) fd.append("lat", String(batchGeo.lat));
+          if (batchGeo.lng !== null) fd.append("lng", String(batchGeo.lng));
+          if (batchGeo.overrideExif) fd.append("overrideExif", "true");
           if (Number(batchColId) > 0) fd.append("collectionId", batchColId);
           await fetch("/api/admin/upload", { method: "POST", body: fd });
         }
@@ -372,7 +405,7 @@ export function AdminClient({
       notify(`已成功上传 ${arr.length} 幅作品`);
       router.refresh();
     },
-    [batchCategory, batchColId, batchFeatured, notify, router, storageMode]
+    [batchCategory, batchColId, batchFeatured, batchGeo, batchHidden, notify, router, storageMode]
   );
 
   // Global window file drag-and-drop listener
@@ -538,6 +571,7 @@ export function AdminClient({
       body: JSON.stringify({
         ...extPhoto,
         featured: batchFeatured,
+        hidden: batchHidden,
         collectionIds: Number(batchColId) > 0 ? [Number(batchColId)] : [],
       }),
     });
@@ -559,6 +593,16 @@ export function AdminClient({
     router.refresh();
   };
 
+  const movePhotoBy = (photoId: number, dir: -1 | 1, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    const idx = photoList.findIndex((p) => p.id === photoId);
+    const target = idx + dir;
+    if (idx < 0 || target < 0 || target >= photoList.length) return;
+    const next = [...photoList];
+    [next[idx], next[target]] = [next[target], next[idx]];
+    persistPhotoOrder(next);
+  };
+
   const toggleFeatured = async (photo: Photo, e?: React.MouseEvent) => {
     e?.stopPropagation();
     const nextVal = !photo.featured;
@@ -572,6 +616,20 @@ export function AdminClient({
     router.refresh();
   };
 
+  const toggleHidden = async (photo: Photo, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    const nextVal = !photo.hidden;
+    setPhotoList((prev) => prev.map((p) => (p.id === photo.id ? { ...p, hidden: nextVal } : p)));
+    if (editingPhoto?.id === photo.id) setEditingPhoto({ ...editingPhoto, hidden: nextVal });
+    await fetch(`/api/admin/photos/${photo.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ hidden: nextVal }),
+    });
+    notify(nextVal ? "已隐藏该作品（前台不可见）" : "已恢复公开展示");
+    router.refresh();
+  };
+
   const deletePhoto = async (photo: Photo) => {
     if (!confirm(`确认删除《${photo.title}》？`)) return;
     await fetch(`/api/admin/photos/${photo.id}`, { method: "DELETE" });
@@ -582,7 +640,7 @@ export function AdminClient({
   };
 
   const runBatchAction = async (
-    action: "category" | "featured" | "collection" | "delete",
+    action: "category" | "featured" | "hidden" | "collection" | "delete",
     value?: string | boolean | number
   ) => {
     if (selectedIds.length === 0) return;
@@ -640,6 +698,9 @@ export function AdminClient({
       blocks: parseMonographBlocks(col.blocksJson, col),
     });
     setPickerOpen(false);
+    if (typeof window !== "undefined" && window.innerWidth < 1024) {
+      setTimeout(() => colEditorRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 60);
+    }
   };
 
   const persistCollectionOrder = async (nextCols: CollectionWithPhotos[]) => {
@@ -833,8 +894,24 @@ export function AdminClient({
     router.refresh();
   };
 
+  const generateAndSaveApiKey = async () => {
+    const bytes = new Uint8Array(20);
+    crypto.getRandomValues(bytes);
+    const key = `gk_${Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("")}`;
+    const nextSettings = { ...settingsForm, apiKey: key };
+    setSettingsForm(nextSettings);
+    await fetch("/api/admin/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ apiKey: key }),
+    });
+    notify("已生成并立即启用新 API 密钥");
+    router.refresh();
+  };
+
   const photoMap = new Map(photoList.map((p) => [p.id, p]));
   const featuredCount = photoList.filter((p) => p.featured).length;
+  const hiddenCount = photoList.filter((p) => p.hidden).length;
   const noGpsCount = photoList.filter((p) => p.lat === null || p.lng === null).length;
   const unassignedCount = photoList.filter((p) => !assignedPhotoIds.has(p.id)).length;
 
@@ -865,13 +942,41 @@ export function AdminClient({
 
       {/* Top Studio Workbench Bar */}
       <header className="sticky top-0 z-30 header-material border-b border-[var(--border)]">
-        <div className="mx-auto flex max-w-[1480px] flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-7">
-          <div className="flex items-center gap-5 sm:gap-8 overflow-x-auto no-scrollbar">
+        <div className="mx-auto flex max-w-[1480px] flex-col gap-2.5 px-3.5 py-2.5 sm:flex-row sm:items-center sm:justify-between sm:px-7 sm:py-3">
+          <div className="flex items-center justify-between sm:justify-start gap-4 sm:gap-8">
             <span className="text-sm sm:text-base font-semibold tracking-wide shrink-0">
               {settingsForm.photographerName || "林远"} · 工作台
             </span>
 
-            <nav className="flex items-center gap-1 rounded-lg bg-[var(--bg-subtle)] p-1 text-xs">
+            {/* Mobile Top-Right Quick Actions */}
+            <div className="flex sm:hidden items-center gap-2 text-xs text-[var(--fg-muted)]">
+              <button
+                type="button"
+                onClick={toggleTheme}
+                title="切换深浅主题"
+                className="flex h-7 w-7 items-center justify-center rounded-full hover:bg-[var(--bg-subtle)] hover:text-[var(--fg)] transition cursor-pointer"
+              >
+                {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+              </button>
+              <Link
+                href="/"
+                target="_blank"
+                className="inline-flex items-center gap-1 rounded-md border border-[var(--border)] px-2 py-1 text-[var(--fg)]"
+              >
+                <span>前台</span>
+                <ExternalLink className="h-3 w-3" />
+              </Link>
+              <button
+                type="button"
+                onClick={handleLogout}
+                aria-label="退出"
+                className="p-1 text-[var(--fg-muted)] hover:text-[var(--fg)] cursor-pointer"
+              >
+                <LogOut className="h-3.5 w-3.5" />
+              </button>
+            </div>
+
+            <nav className="hidden sm:flex items-center gap-1 rounded-lg bg-[var(--bg-subtle)] p-1 text-xs">
               {(
                 [
                   ["photos", Images, "作品库", photoList.length],
@@ -903,7 +1008,39 @@ export function AdminClient({
             </nav>
           </div>
 
-          <div className="flex items-center gap-3 text-xs text-[var(--fg-muted)]">
+          {/* Mobile Dedicated Full-Width 4-Tab Bar */}
+          <nav className="grid sm:hidden grid-cols-4 gap-1 rounded-lg bg-[var(--bg-subtle)] p-1 text-xs">
+            {(
+              [
+                ["photos", Images, "作品", photoList.length],
+                ["collections", Layers, "画册", colList.length],
+                ["gear", Camera, "器材", initialGear.length],
+                ["settings", Settings, "设置", null],
+              ] as const
+            ).map(([key, Icon, label, count]) => {
+              const active = tab === key;
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setTab(key)}
+                  className={`flex items-center justify-center gap-1 rounded-md py-1.5 font-medium transition cursor-pointer ${
+                    active
+                      ? "bg-[var(--fg)] text-[var(--bg)] shadow-xs"
+                      : "text-[var(--fg-muted)]"
+                  }`}
+                >
+                  <Icon className="h-3.5 w-3.5 shrink-0" />
+                  <span>{label}</span>
+                  {count !== null && (
+                    <span className={`text-[10px] ${active ? "opacity-75" : "opacity-60"}`}>{count}</span>
+                  )}
+                </button>
+              );
+            })}
+          </nav>
+
+          <div className="hidden sm:flex items-center gap-3 text-xs text-[var(--fg-muted)]">
             <span className="hidden lg:inline rounded-full border border-[var(--border)] px-2.5 py-0.5 text-[11px]">
               {storageMode === "s3" ? "S3 云端存储" : "本地存储"}
             </span>
@@ -973,6 +1110,7 @@ export function AdminClient({
                   [
                     ["all", `全部 ${photoList.length}`],
                     ["featured", `★ 精选 ${featuredCount}`],
+                    ...(hiddenCount > 0 || quickFilter === "hidden" ? [["hidden", `已隐藏 ${hiddenCount}`]] : []),
                     ...(noGpsCount > 0 ? [["nogps", `缺定位 ${noGpsCount}`]] : []),
                     ...(unassignedCount > 0 ? [["unassigned", `未入集 ${unassignedCount}`]] : []),
                     ...CATEGORIES.map((c) => {
@@ -1103,20 +1241,110 @@ export function AdminClient({
                     />
                     <span>设为首页精选</span>
                   </label>
+                  <label className="inline-flex items-center gap-1.5 cursor-pointer text-[var(--fg)]">
+                    <input
+                      type="checkbox"
+                      checked={batchHidden}
+                      onChange={(e) => setBatchHidden(e.target.checked)}
+                    />
+                    <span>上传后先隐藏</span>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setShowUploadMap((v) => !v)}
+                    className={`inline-flex items-center gap-1 rounded-md border px-2.5 py-1 transition cursor-pointer ${
+                      showUploadMap || batchGeo.lat !== null || extPhoto.lat !== ""
+                        ? "border-emerald-500/50 bg-emerald-500/10 text-emerald-500 font-medium"
+                        : "border-[var(--border)] text-[var(--fg)] hover:bg-[var(--bg-subtle)]"
+                    }`}
+                  >
+                    <MapIcon className="h-3.5 w-3.5" />
+                    <span>
+                      {batchGeo.lat !== null
+                        ? `已选点 ${batchGeo.lat.toFixed(2)}, ${batchGeo.lng?.toFixed(2)}`
+                        : "地图选点预设坐标"}
+                    </span>
+                  </button>
                 </div>
               </div>
+
+              {/* Interactive Upload Map Coordinate Picker */}
+              {showUploadMap && (
+                <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-subtle)]/70 p-3 space-y-2.5 animate-tab-in">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="font-medium text-[var(--fg)]">
+                      点击地图点选拍摄位置（无内置 GPS 的相机原图会自动写入此处所选经纬度与地名）
+                    </span>
+                    {uploadSubTab === "file" && (
+                      <label className="inline-flex items-center gap-1.5 text-[var(--fg-muted)] cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={batchGeo.overrideExif}
+                          onChange={(e) => setBatchGeo({ ...batchGeo, overrideExif: e.target.checked })}
+                        />
+                        <span>覆盖照片自带 EXIF 坐标</span>
+                      </label>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <input
+                      placeholder="预设拍摄地中文名 (如 东京 · 新宿)"
+                      value={uploadSubTab === "file" ? batchGeo.location : extPhoto.location}
+                      onChange={(e) =>
+                        uploadSubTab === "file"
+                          ? setBatchGeo({ ...batchGeo, location: e.target.value })
+                          : setExtPhoto({ ...extPhoto, location: e.target.value })
+                      }
+                      className={INPUT_CLS}
+                    />
+                    <input
+                      placeholder="Location in English (e.g. Shinjuku, Tokyo)"
+                      value={uploadSubTab === "file" ? batchGeo.locationEn : extPhoto.locationEn}
+                      onChange={(e) =>
+                        uploadSubTab === "file"
+                          ? setBatchGeo({ ...batchGeo, locationEn: e.target.value })
+                          : setExtPhoto({ ...extPhoto, locationEn: e.target.value })
+                      }
+                      className={INPUT_CLS}
+                    />
+                  </div>
+                  <AdminMapPicker
+                    lat={uploadSubTab === "file" ? batchGeo.lat : extPhoto.lat}
+                    lng={uploadSubTab === "file" ? batchGeo.lng : extPhoto.lng}
+                    onChange={(next) => {
+                      if (uploadSubTab === "file") {
+                        setBatchGeo((prev) => ({
+                          ...prev,
+                          lat: next.lat,
+                          lng: next.lng,
+                          location: next.location || prev.location,
+                          locationEn: next.locationEn || prev.locationEn,
+                        }));
+                      } else {
+                        setExtPhoto((prev) => ({
+                          ...prev,
+                          lat: next.lat ?? "",
+                          lng: next.lng ?? "",
+                          location: next.location || prev.location,
+                          locationEn: next.locationEn || prev.locationEn,
+                        }));
+                      }
+                    }}
+                  />
+                </div>
+              )}
 
               {uploadSubTab === "file" ? (
                 <div
                   onClick={() => fileInputRef.current?.click()}
-                  className="flex cursor-pointer flex-col items-center justify-center gap-1.5 rounded-lg border border-dashed border-[var(--border)] bg-[var(--bg-subtle)] py-7 text-center hover:border-[var(--fg-muted)] transition"
+                  className="flex cursor-pointer flex-col items-center justify-center gap-1.5 rounded-lg border border-dashed border-[var(--border)] bg-[var(--bg-subtle)] py-6 sm:py-7 px-3 text-center hover:border-[var(--fg-muted)] transition"
                 >
                   <Upload className="h-5 w-5 text-[var(--fg-muted)]" />
                   <div className="text-sm font-medium text-[var(--fg)]">
                     {uploading ? uploadProgress : "点击选择多张原图，或直接将照片拖入页面任意位置"}
                   </div>
                   <p className="text-[var(--fg-subtle)]">
-                    自动读取机身、镜头、焦段、光圈、快门、ISO、拍摄日期与 GPS 坐标
+                    自动读取机身、镜头、焦段、光圈、快门、ISO、拍摄日期与 GPS 坐标；也可上方点开「地图选点」预设位置
                   </p>
                   <input
                     ref={fileInputRef}
@@ -1152,19 +1380,8 @@ export function AdminClient({
                     />
                     <button
                       type="button"
-                      disabled={geocoding}
-                      onClick={() =>
-                        resolveCityGeocode(extPhoto.location, (g) =>
-                          setExtPhoto({
-                            ...extPhoto,
-                            location: g.location,
-                            locationEn: g.locationEn,
-                            lat: g.lat,
-                            lng: g.lng,
-                          })
-                        )
-                      }
-                      title="自动解析经纬度"
+                      onClick={() => setShowUploadMap((v) => !v)}
+                      title="在地图上选点"
                       className="shrink-0 rounded-md border border-[var(--border)] px-2.5 text-[var(--fg-muted)] hover:text-[var(--fg)] cursor-pointer"
                     >
                       <MapPin className="h-3.5 w-3.5" />
@@ -1231,13 +1448,20 @@ export function AdminClient({
                           <img
                             src={photo.url}
                             alt={photo.title}
-                            className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]"
+                            className={`h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.03] ${
+                              photo.hidden ? "opacity-45 grayscale-[35%]" : ""
+                            }`}
                           />
-                          {/* Top-Left Checkbox */}
+                          {photo.hidden && (
+                            <span className="pointer-events-none absolute bottom-2 left-2 rounded bg-zinc-950/80 px-1.5 py-0.5 text-[10px] font-medium text-zinc-200 backdrop-blur-sm">
+                              已隐藏
+                            </span>
+                          )}
+                          {/* Top-Left Checkbox (Always reachable on touch screens) */}
                           <label
                             onClick={(e) => e.stopPropagation()}
                             className={`absolute left-2 top-2 flex h-6 w-6 items-center justify-center rounded bg-black/55 backdrop-blur-sm transition cursor-pointer ${
-                              checked ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+                              checked ? "opacity-100" : "opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
                             }`}
                           >
                             <input
@@ -1252,19 +1476,33 @@ export function AdminClient({
                             />
                           </label>
 
-                          {/* Top-Right Featured Star */}
-                          <button
-                            type="button"
-                            onClick={(e) => toggleFeatured(photo, e)}
-                            title={photo.featured ? "取消首页精选" : "设为首页精选"}
-                            className={`absolute right-2 top-2 flex h-6 w-6 items-center justify-center rounded-full backdrop-blur-sm transition cursor-pointer ${
-                              photo.featured
-                                ? "bg-amber-400 text-zinc-950"
-                                : "bg-black/45 text-white/75 opacity-0 group-hover:opacity-100 hover:text-white"
-                            }`}
-                          >
-                            <Star className="h-3.5 w-3.5 fill-current" />
-                          </button>
+                          {/* Top-Right Hide + Featured Controls */}
+                          <div className="absolute right-2 top-2 flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={(e) => toggleHidden(photo, e)}
+                              title={photo.hidden ? "点击恢复前台公开" : "点击隐藏（前台不展示）"}
+                              className={`flex h-6 w-6 items-center justify-center rounded-full backdrop-blur-sm transition cursor-pointer ${
+                                photo.hidden
+                                  ? "bg-rose-500 text-white"
+                                  : "bg-black/45 text-white/80 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 hover:text-white"
+                              }`}
+                            >
+                              {photo.hidden ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) => toggleFeatured(photo, e)}
+                              title={photo.featured ? "取消首页精选" : "设为首页精选"}
+                              className={`flex h-6 w-6 items-center justify-center rounded-full backdrop-blur-sm transition cursor-pointer ${
+                                photo.featured
+                                  ? "bg-amber-400 text-zinc-950"
+                                  : "bg-black/45 text-white/75 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 hover:text-white"
+                              }`}
+                            >
+                              <Star className="h-3.5 w-3.5 fill-current" />
+                            </button>
+                          </div>
                         </div>
 
                         <div className="p-2.5 space-y-1 text-xs">
@@ -1312,8 +1550,8 @@ export function AdminClient({
                           inspecting ? "bg-[var(--bg-subtle)]" : "hover:bg-[var(--bg-subtle)]/60"
                         }`}
                       >
-                        <div className="flex items-center gap-3 min-w-0">
-                          <GripVertical className="h-4 w-4 shrink-0 text-[var(--fg-subtle)] cursor-grab" />
+                        <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
+                          <GripVertical className="hidden sm:block h-4 w-4 shrink-0 text-[var(--fg-subtle)] cursor-grab" />
                           <input
                             type="checkbox"
                             checked={checked}
@@ -1324,9 +1562,22 @@ export function AdminClient({
                               )
                             }
                           />
-                          <img src={photo.url} alt="" className="h-11 w-16 shrink-0 rounded-xs object-cover" />
+                          <img
+                            src={photo.url}
+                            alt=""
+                            className={`h-11 w-16 shrink-0 rounded-xs object-cover ${
+                              photo.hidden ? "opacity-45 grayscale" : ""
+                            }`}
+                          />
                           <div className="min-w-0">
-                            <div className="truncate font-medium text-sm text-[var(--fg)]">{photo.title}</div>
+                            <div className="flex items-center gap-1.5">
+                              <span className="truncate font-medium text-sm text-[var(--fg)]">{photo.title}</span>
+                              {photo.hidden && (
+                                <span className="shrink-0 rounded bg-rose-500/15 px-1.5 py-0.5 text-[10px] text-rose-400">
+                                  已隐藏
+                                </span>
+                              )}
+                            </div>
                             <div className="truncate text-[var(--fg-muted)]">
                               {[CAT_NAME[photo.category] || photo.category, photo.camera, photo.location]
                                 .filter(Boolean)
@@ -1335,10 +1586,42 @@ export function AdminClient({
                           </div>
                         </div>
 
-                        <div className="flex items-center gap-2 shrink-0">
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          {quickFilter === "all" && !searchQuery && (
+                            <div className="flex sm:hidden items-center gap-1">
+                              <button
+                                type="button"
+                                disabled={realIdx <= 0}
+                                onClick={(e) => movePhotoBy(photo.id, -1, e)}
+                                className="rounded border border-[var(--border)] p-1 text-[var(--fg-muted)] disabled:opacity-25"
+                              >
+                                <ArrowUp className="h-3.5 w-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                disabled={realIdx >= photoList.length - 1}
+                                onClick={(e) => movePhotoBy(photo.id, 1, e)}
+                                className="rounded border border-[var(--border)] p-1 text-[var(--fg-muted)] disabled:opacity-25"
+                              >
+                                <ArrowDown className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
+                          )}
                           {photo.lat !== null && (
                             <span className="hidden sm:inline text-[11px] text-emerald-500">GPS</span>
                           )}
+                          <button
+                            type="button"
+                            onClick={(e) => toggleHidden(photo, e)}
+                            title={photo.hidden ? "恢复公开" : "隐藏作品"}
+                            className={`rounded p-1.5 border cursor-pointer ${
+                              photo.hidden
+                                ? "border-rose-500/40 bg-rose-500/15 text-rose-400"
+                                : "border-[var(--border)] text-[var(--fg-muted)]"
+                            }`}
+                          >
+                            {photo.hidden ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                          </button>
                           <button
                             type="button"
                             onClick={(e) => toggleFeatured(photo, e)}
@@ -1348,7 +1631,7 @@ export function AdminClient({
                                 : "border-[var(--border)] text-[var(--fg-muted)]"
                             }`}
                           >
-                            ★ 精选
+                            ★<span className="hidden sm:inline"> 精选</span>
                           </button>
                         </div>
                       </div>
@@ -1358,88 +1641,128 @@ export function AdminClient({
               )}
             </div>
 
-            {/* Right Sticky Live Inspector Panel */}
+            {/* Right Sticky Live Inspector (Desktop) / Fixed Slide-Up Bottom Sheet (Mobile < lg) */}
             {editingPhoto && (
-              <aside className="surface-card w-full lg:w-[390px] lg:sticky lg:top-18 shrink-0 rounded-xl p-4 sm:p-5 space-y-4 text-xs animate-tab-in">
-                <div className="flex items-center justify-between border-b border-[var(--border)] pb-2.5">
-                  <div className="flex items-center gap-2">
-                    <span className="font-semibold text-sm text-[var(--fg)]">作品属性 · #{editingPhoto.id}</span>
-                    <div className="flex items-center rounded border border-[var(--border)]">
-                      <button
-                        type="button"
-                        onClick={() => stepInspector(-1)}
-                        title="上一幅"
-                        className="p-1 text-[var(--fg-muted)] hover:text-[var(--fg)] cursor-pointer"
-                      >
-                        <ChevronLeft className="h-3.5 w-3.5" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => stepInspector(1)}
-                        title="下一幅"
-                        className="p-1 border-l border-[var(--border)] text-[var(--fg-muted)] hover:text-[var(--fg)] cursor-pointer"
-                      >
-                        <ChevronRight className="h-3.5 w-3.5" />
-                      </button>
-                    </div>
-                  </div>
+              <>
+                <div
+                  onClick={() => setEditingPhoto(null)}
+                  className="fixed inset-0 z-40 bg-black/55 backdrop-blur-xs lg:hidden"
+                />
+                <aside className="surface-card max-lg:fixed max-lg:inset-x-0 max-lg:bottom-0 max-lg:z-50 max-lg:flex max-lg:max-h-[88dvh] max-lg:flex-col max-lg:rounded-t-2xl max-lg:rounded-b-none max-lg:pb-[max(1rem,env(safe-area-inset-bottom))] max-lg:shadow-2xl w-full lg:w-[400px] lg:sticky lg:top-18 shrink-0 rounded-xl p-4 sm:p-5 space-y-3.5 text-xs animate-tab-in">
+                  {/* Mobile Bottom-Sheet Grab Pill */}
+                  <div className="mx-auto h-1 w-10 rounded-full bg-[var(--border)] lg:hidden shrink-0" />
 
-                  <div className="flex items-center gap-2">
-                    <Link
-                      href={`/photo/${editingPhoto.id}`}
-                      target="_blank"
-                      title="打开作品独立页"
-                      className="text-[var(--fg-muted)] hover:text-[var(--fg)]"
-                    >
-                      <ExternalLink className="h-3.5 w-3.5" />
-                    </Link>
-                    <button
-                      type="button"
-                      onClick={() => setEditingPhoto(null)}
-                      className="text-[var(--fg-muted)] hover:text-[var(--fg)] cursor-pointer"
-                    >
-                      <X className="h-4 w-4" />
-                    </button>
-                  </div>
-                </div>
-
-                {/* Preview + Quick Featured / Delete */}
-                <div className="flex items-center gap-3">
-                  <img
-                    src={editingPhoto.url}
-                    alt=""
-                    className="h-18 w-26 shrink-0 rounded-md object-cover ring-1 ring-[var(--border)]"
-                  />
-                  <div className="space-y-2 min-w-0 flex-1">
-                    <div className="text-[11px] text-[var(--fg-muted)]">
-                      画幅：{editingPhoto.width} × {editingPhoto.height}
-                    </div>
+                  <div className="flex items-center justify-between border-b border-[var(--border)] pb-2.5 shrink-0">
                     <div className="flex items-center gap-2">
+                      <span className="font-semibold text-sm text-[var(--fg)]">作品属性 · #{editingPhoto.id}</span>
+                      <div className="flex items-center rounded border border-[var(--border)]">
+                        <button
+                          type="button"
+                          onClick={() => stepInspector(-1)}
+                          title="上一幅"
+                          className="p-1 text-[var(--fg-muted)] hover:text-[var(--fg)] cursor-pointer"
+                        >
+                          <ChevronLeft className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => stepInspector(1)}
+                          title="下一幅"
+                          className="p-1 border-l border-[var(--border)] text-[var(--fg-muted)] hover:text-[var(--fg)] cursor-pointer"
+                        >
+                          <ChevronRight className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2.5">
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => movePhotoBy(editingPhoto.id, -1)}
+                          title="向前移动排序"
+                          className="rounded border border-[var(--border)] p-1 text-[var(--fg-muted)] hover:text-[var(--fg)] cursor-pointer"
+                        >
+                          <ArrowUp className="h-3 w-3" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => movePhotoBy(editingPhoto.id, 1)}
+                          title="向后移动排序"
+                          className="rounded border border-[var(--border)] p-1 text-[var(--fg-muted)] hover:text-[var(--fg)] cursor-pointer"
+                        >
+                          <ArrowDown className="h-3 w-3" />
+                        </button>
+                      </div>
+                      <Link
+                        href={`/photo/${editingPhoto.id}`}
+                        target="_blank"
+                        title="打开作品独立页"
+                        className="text-[var(--fg-muted)] hover:text-[var(--fg)]"
+                      >
+                        <ExternalLink className="h-3.5 w-3.5" />
+                      </Link>
                       <button
                         type="button"
-                        onClick={() => setEditingPhoto({ ...editingPhoto, featured: !editingPhoto.featured })}
-                        className={`inline-flex items-center gap-1 rounded-md border px-2.5 py-1 cursor-pointer ${
-                          editingPhoto.featured
-                            ? "border-amber-400/50 bg-amber-400/15 text-amber-500 font-medium"
-                            : "border-[var(--border)] text-[var(--fg-muted)]"
-                        }`}
+                        onClick={() => setEditingPhoto(null)}
+                        className="text-[var(--fg-muted)] hover:text-[var(--fg)] cursor-pointer"
                       >
-                        <Star className="h-3 w-3 fill-current" />
-                        <span>{editingPhoto.featured ? "已设精选" : "设为精选"}</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => deletePhoto(editingPhoto)}
-                        className="inline-flex items-center gap-1 rounded-md border border-[var(--border)] px-2.5 py-1 text-[var(--fg-muted)] hover:border-red-500/40 hover:text-red-400 cursor-pointer"
-                      >
-                        <Trash2 className="h-3 w-3" /> 删除
+                        <X className="h-4 w-4" />
                       </button>
                     </div>
                   </div>
-                </div>
 
-                {/* Fields */}
-                <div className="space-y-3 max-h-[56dvh] overflow-y-auto pr-0.5">
+                  {/* Preview + Quick Featured / Hidden / Delete */}
+                  <div className="flex items-center gap-3 shrink-0">
+                    <img
+                      src={editingPhoto.url}
+                      alt=""
+                      className={`h-16 w-24 shrink-0 rounded-md object-cover ring-1 ring-[var(--border)] ${
+                        editingPhoto.hidden ? "opacity-50 grayscale" : ""
+                      }`}
+                    />
+                    <div className="space-y-1.5 min-w-0 flex-1">
+                      <div className="text-[11px] text-[var(--fg-muted)]">
+                        画幅：{editingPhoto.width} × {editingPhoto.height}
+                      </div>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => setEditingPhoto({ ...editingPhoto, featured: !editingPhoto.featured })}
+                          className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 cursor-pointer ${
+                            editingPhoto.featured
+                              ? "border-amber-400/50 bg-amber-400/15 text-amber-500 font-medium"
+                              : "border-[var(--border)] text-[var(--fg-muted)]"
+                          }`}
+                        >
+                          <Star className="h-3 w-3 fill-current" />
+                          <span>{editingPhoto.featured ? "已精选" : "精选"}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setEditingPhoto({ ...editingPhoto, hidden: !editingPhoto.hidden })}
+                          className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 cursor-pointer ${
+                            editingPhoto.hidden
+                              ? "border-rose-500/50 bg-rose-500/15 text-rose-400 font-medium"
+                              : "border-[var(--border)] text-[var(--fg-muted)]"
+                          }`}
+                        >
+                          {editingPhoto.hidden ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+                          <span>{editingPhoto.hidden ? "已隐藏" : "隐藏"}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => deletePhoto(editingPhoto)}
+                          className="inline-flex items-center gap-1 rounded-md border border-[var(--border)] px-2 py-1 text-[var(--fg-muted)] hover:border-red-500/40 hover:text-red-400 cursor-pointer"
+                        >
+                          <Trash2 className="h-3 w-3" /> 删除
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Fields */}
+                  <div className="space-y-3 flex-1 min-h-0 lg:max-h-[56dvh] overflow-y-auto overscroll-contain pr-0.5">
                   <div className="grid grid-cols-2 gap-2">
                     <label className="space-y-1">
                       <span className="text-[var(--fg-muted)]">中文标题</span>
@@ -1505,29 +1828,39 @@ export function AdminClient({
                     </label>
                   </div>
 
-                  {/* Location + 1-Click Geocode */}
+                  {/* Location + Interactive Map Picker + 1-Click Geocode */}
                   <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-subtle)] p-2.5 space-y-2">
-                    <div className="flex items-center justify-between">
+                    <div className="flex flex-wrap items-center justify-between gap-1.5">
                       <span className="text-[var(--fg-muted)] font-medium">地理位置与地图落点</span>
-                      <button
-                        type="button"
-                        disabled={geocoding}
-                        onClick={() =>
-                          resolveCityGeocode(editingPhoto.location || editingPhoto.locationEn, (g) =>
-                            setEditingPhoto({
-                              ...editingPhoto,
-                              location: editingPhoto.location || g.location,
-                              locationEn: editingPhoto.locationEn || g.locationEn,
-                              lat: g.lat,
-                              lng: g.lng,
-                            })
-                          )
-                        }
-                        className="inline-flex items-center gap-1 text-emerald-500 hover:underline cursor-pointer"
-                      >
-                        <MapPin className="h-3 w-3" />
-                        <span>{geocoding ? "定位中…" : "由城市名自动定位"}</span>
-                      </button>
+                      <div className="flex items-center gap-2.5">
+                        <button
+                          type="button"
+                          onClick={() => setShowInspectorMap((v) => !v)}
+                          className="inline-flex items-center gap-1 text-emerald-500 font-medium hover:underline cursor-pointer"
+                        >
+                          <MapIcon className="h-3 w-3" />
+                          <span>{showInspectorMap ? "收起地图" : "地图选点"}</span>
+                        </button>
+                        <button
+                          type="button"
+                          disabled={geocoding}
+                          onClick={() =>
+                            resolveCityGeocode(editingPhoto.location || editingPhoto.locationEn, (g) =>
+                              setEditingPhoto({
+                                ...editingPhoto,
+                                location: editingPhoto.location || g.location,
+                                locationEn: editingPhoto.locationEn || g.locationEn,
+                                lat: g.lat,
+                                lng: g.lng,
+                              })
+                            )
+                          }
+                          className="inline-flex items-center gap-1 text-[var(--fg-muted)] hover:text-[var(--fg)] hover:underline cursor-pointer"
+                        >
+                          <MapPin className="h-3 w-3" />
+                          <span>{geocoding ? "定位中…" : "城市名解析"}</span>
+                        </button>
+                      </div>
                     </div>
                     <div className="grid grid-cols-2 gap-2">
                       <input
@@ -1569,6 +1902,28 @@ export function AdminClient({
                         className={INPUT_CLS}
                       />
                     </div>
+                    {showInspectorMap && (
+                      <div className="pt-1">
+                        <AdminMapPicker
+                          lat={editingPhoto.lat}
+                          lng={editingPhoto.lng}
+                          heightClass="h-44"
+                          onChange={(next) =>
+                            setEditingPhoto((prev) =>
+                              prev
+                                ? {
+                                    ...prev,
+                                    lat: next.lat,
+                                    lng: next.lng,
+                                    location: prev.location || next.location || "",
+                                    locationEn: prev.locationEn || next.locationEn || "",
+                                  }
+                                : prev
+                            )
+                          }
+                        />
+                      </div>
+                    )}
                   </div>
 
                   {/* Camera & Lens with Autocomplete */}
@@ -1674,7 +2029,7 @@ export function AdminClient({
                 </div>
 
                 {/* Save & Save+Next Footer */}
-                <div className="flex items-center gap-2 border-t border-[var(--border)] pt-3">
+                <div className="flex items-center gap-2 border-t border-[var(--border)] pt-3 shrink-0">
                   <button
                     type="button"
                     disabled={savingPhoto}
@@ -1693,13 +2048,14 @@ export function AdminClient({
                   </button>
                 </div>
               </aside>
+              </>
             )}
           </div>
 
           {/* Contextual Floating Bottom Batch Action Bar */}
           {selectedIds.length > 0 && (
-            <div className="fixed inset-x-0 bottom-5 z-40 flex justify-center px-4 pointer-events-none">
-              <div className="pointer-events-auto surface-card flex flex-wrap items-center gap-2.5 rounded-xl px-4 py-2.5 text-xs shadow-2xl animate-tab-in">
+            <div className="fixed inset-x-0 bottom-[max(1rem,env(safe-area-inset-bottom))] z-30 flex justify-center px-3 sm:px-4 pointer-events-none">
+              <div className="pointer-events-auto surface-card flex flex-wrap items-center gap-2 rounded-xl px-3.5 py-2.5 text-xs shadow-2xl animate-tab-in">
                 <span className="font-semibold text-[var(--fg)]">已选 {selectedIds.length} 幅</span>
                 <button
                   type="button"
@@ -1762,10 +2118,17 @@ export function AdminClient({
                 </button>
                 <button
                   type="button"
-                  onClick={() => runBatchAction("featured", false)}
+                  onClick={() => runBatchAction("hidden", true)}
+                  className="rounded border border-[var(--border)] px-2.5 py-1 text-rose-400 hover:bg-rose-500/10 cursor-pointer"
+                >
+                  隐藏
+                </button>
+                <button
+                  type="button"
+                  onClick={() => runBatchAction("hidden", false)}
                   className="rounded border border-[var(--border)] px-2.5 py-1 text-[var(--fg-muted)] hover:text-[var(--fg)] cursor-pointer"
                 >
-                  取消精选
+                  公开
                 </button>
                 <button
                   type="button"
@@ -1844,16 +2207,44 @@ export function AdminClient({
                           </div>
                         </div>
                       </div>
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          deleteCollection(col.id, col.title);
-                        }}
-                        className="p-1.5 text-[var(--fg-subtle)] hover:text-red-400 cursor-pointer"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          type="button"
+                          disabled={idx === 0}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const next = [...colList];
+                            [next[idx], next[idx - 1]] = [next[idx - 1], next[idx]];
+                            persistCollectionOrder(next);
+                          }}
+                          className="lg:hidden rounded border border-[var(--border)] p-1 text-[var(--fg-muted)] disabled:opacity-25 cursor-pointer"
+                        >
+                          <ArrowUp className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          disabled={idx === colList.length - 1}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const next = [...colList];
+                            [next[idx], next[idx + 1]] = [next[idx + 1], next[idx]];
+                            persistCollectionOrder(next);
+                          }}
+                          className="lg:hidden rounded border border-[var(--border)] p-1 text-[var(--fg-muted)] disabled:opacity-25 cursor-pointer"
+                        >
+                          <ArrowDown className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            deleteCollection(col.id, col.title);
+                          }}
+                          className="p-1.5 text-[var(--fg-subtle)] hover:text-red-400 cursor-pointer"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
                     </div>
                   );
                 })}
@@ -1861,7 +2252,7 @@ export function AdminClient({
             </div>
 
             {/* Right 8 Cols: Active Monograph Visual Editor */}
-            <div className="lg:col-span-8">
+            <div ref={colEditorRef} className="lg:col-span-8 scroll-mt-24">
               {editingCol ? (
                 <form onSubmit={saveCollection} className="surface-card rounded-xl p-5 sm:p-6 space-y-5 text-xs">
                   <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border)] pb-3.5">
@@ -2515,6 +2906,89 @@ export function AdminClient({
                   </div>
                 </div>
               ))}
+            </section>
+
+            {/* Agent / CLI Open REST API Key & Documentation */}
+            <section className="surface-card rounded-xl p-5 space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="space-y-0.5">
+                  <h3 className="inline-flex items-center gap-1.5 text-sm font-semibold text-[var(--fg)]">
+                    <Terminal className="h-4 w-4 text-emerald-500" />
+                    <span>Agent / CLI 开放管理 API</span>
+                  </h3>
+                  <p className="text-[var(--fg-muted)]">
+                    让 AI Agent、脚本或命令行通过{" "}
+                    <code className="rounded bg-[var(--bg-subtle)] px-1.5 py-0.5">
+                      Authorization: Bearer &lt;API_KEY&gt;
+                    </code>{" "}
+                    直接上传、编辑、隐藏作品或维护影集与站点设置。
+                  </p>
+                </div>
+                <Link
+                  href="/api/admin/openapi"
+                  target="_blank"
+                  className="inline-flex items-center gap-1 rounded-md border border-[var(--border)] px-3 py-1.5 text-[var(--fg)] hover:bg-[var(--bg-subtle)]"
+                >
+                  <span>OpenAPI 3.1 规范</span>
+                  <ExternalLink className="h-3 w-3" />
+                </Link>
+              </div>
+
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                <div className="relative flex-1">
+                  <KeyRound className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-[var(--fg-subtle)]" />
+                  <input
+                    value={settingsForm.apiKey || ""}
+                    onChange={(e) => {
+                      setSettingsForm({ ...settingsForm, apiKey: e.target.value });
+                      setSettingsDirty(true);
+                    }}
+                    placeholder="点击右侧「生成新密钥」或自定义 8 位以上 API Key（亦支持环境变量 ADMIN_API_KEY）"
+                    className={`pl-8 font-mono ${INPUT_CLS}`}
+                  />
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={generateAndSaveApiKey}
+                    className="flex-1 sm:flex-none inline-flex items-center justify-center gap-1.5 rounded-md border border-[var(--border)] bg-[var(--bg-subtle)] px-3 py-1.5 font-medium text-[var(--fg)] hover:opacity-85 cursor-pointer"
+                  >
+                    <RefreshCw className="h-3.5 w-3.5" />
+                    <span>生成新密钥</span>
+                  </button>
+                  {settingsForm.apiKey && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard?.writeText(settingsForm.apiKey);
+                        notify("API Key 已复制到剪贴板");
+                      }}
+                      className="inline-flex items-center justify-center gap-1 rounded-md border border-[var(--border)] px-3 py-1.5 text-[var(--fg)] hover:bg-[var(--bg-subtle)] cursor-pointer"
+                    >
+                      <Copy className="h-3.5 w-3.5" />
+                      <span>复制</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-subtle)]/70 p-3 font-mono text-[11px] leading-relaxed text-[var(--fg-muted)] overflow-x-auto">
+                <div># 1. Agent 自动发现全部接口结构：GET /api/admin/openapi</div>
+                <div>
+                  curl -H &quot;Authorization: Bearer {settingsForm.apiKey || "$API_KEY"}&quot;{" "}
+                  {(settingsForm.siteUrl || "http://localhost:3000").replace(/\/$/, "")}/api/admin/photos
+                </div>
+                <div>
+                  # 2. CLI 直接上传原图并写入坐标/分类：POST /api/admin/upload
+                </div>
+                <div>
+                  curl -X POST -H &quot;X-API-Key: {settingsForm.apiKey || "$API_KEY"}&quot; -F &quot;file=@photo.jpg&quot; -F &quot;location=东京, 日本&quot; -F &quot;lat=35.6938&quot; -F &quot;lng=139.7034&quot;{" "}
+                  {(settingsForm.siteUrl || "http://localhost:3000").replace(/\/$/, "")}/api/admin/upload
+                </div>
+                <div>
+                  # 3. 隐藏或修改单幅作品：PATCH /api/admin/photos/:id &#123;&quot;hidden&quot;:true&#125;
+                </div>
+              </div>
             </section>
 
             {/* Basic Profile & Social Fields */}

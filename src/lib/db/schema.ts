@@ -13,6 +13,7 @@ export const photos = sqliteTable("photos", {
   blurData: text("blur_data").notNull().default(""),
   category: text("category").notNull().default("landscape"),
   featured: integer("featured", { mode: "boolean" }).notNull().default(false),
+  hidden: integer("hidden", { mode: "boolean" }).notNull().default(false),
   sortOrder: integer("sort_order").notNull().default(0),
   takenAt: text("taken_at").notNull().default(""),
   location: text("location").notNull().default(""),

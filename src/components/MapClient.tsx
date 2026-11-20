@@ -25,11 +25,18 @@ interface PlaceGroup {
   lng: number;
   location: string;
   locationEn: string;
-  photos: Photo[];
+  photos: (Photo & { lat: number; lng: number })[];
 }
 
-function formatCoord(lat: number, lng: number): string {
-  return `${Math.abs(lat).toFixed(2)}°${lat >= 0 ? "N" : "S"}, ${Math.abs(lng).toFixed(2)}°${lng >= 0 ? "E" : "W"}`;
+function formatCoord(lat: number, lng: number, detailed = false): string {
+  const digits = detailed ? 4 : 2;
+  return `${Math.abs(lat).toFixed(digits)}°${lat >= 0 ? "N" : "S"}, ${Math.abs(lng).toFixed(digits)}°${lng >= 0 ? "E" : "W"}`;
+}
+
+function getClusterRadiusDeg(zoom: number): number {
+  if (zoom >= 11) return 0.00012; // ~13m: individual street shooting spots
+  if (zoom <= 2.5) return 0.45; // ~48km: clean regional/metro clusters at world view
+  return 0.45 / Math.pow(2, zoom - 2.5);
 }
 
 export function MapClient({ photos, collectionsMap, settings }: MapClientProps) {
@@ -45,18 +52,57 @@ export function MapClient({ photos, collectionsMap, settings }: MapClientProps) 
     [photos]
   );
 
-  // Cluster nearby photos (~15km) into clean location groups
+  const initialZoom = qZoom !== null ? Number(qZoom) : focusPhotoId > 0 ? 11.5 : 1.65;
+  const [zoomBucket, setZoomBucket] = useState<number>(() => Math.round(initialZoom * 2) / 2);
+
+  // Dynamically uncluster from city -> district -> street-level spots as map zooms in
   const places = useMemo<PlaceGroup[]>(() => {
+    if (zoomBucket >= 12) {
+      // Street-level: every photo gets its own exact pin; subtly fan out identical tripod coordinates
+      const coordCounts = new Map<string, number>();
+      const coordIndex = new Map<string, number>();
+      for (const p of geoPhotos) {
+        const k = `${p.lat.toFixed(4)}_${p.lng.toFixed(4)}`;
+        coordCounts.set(k, (coordCounts.get(k) || 0) + 1);
+      }
+      return geoPhotos.map((p) => {
+        const k = `${p.lat.toFixed(4)}_${p.lng.toFixed(4)}`;
+        const total = coordCounts.get(k) || 1;
+        const idx = coordIndex.get(k) || 0;
+        coordIndex.set(k, idx + 1);
+
+        let lat = p.lat;
+        let lng = p.lng;
+        if (total > 1) {
+          const angle = (2 * Math.PI * idx) / total;
+          const offset = 0.00028 / Math.pow(1.6, Math.max(0, zoomBucket - 12));
+          lat += Math.sin(angle) * offset;
+          lng += Math.cos(angle) * offset;
+        }
+        return {
+          id: `p_${p.id}`,
+          lat,
+          lng,
+          location: p.location || p.title,
+          locationEn: p.locationEn || p.titleEn || p.location || p.title,
+          photos: [p],
+        };
+      });
+    }
+
+    const radius = getClusterRadiusDeg(zoomBucket);
     const groups: PlaceGroup[] = [];
+
     for (const p of geoPhotos) {
-      const match = groups.find(
-        (g) => Math.hypot(g.lat - p.lat, g.lng - p.lng) < 0.16
-      );
+      const match = groups.find((g) => Math.hypot(g.lat - p.lat, g.lng - p.lng) < radius);
       if (match) {
+        const n = match.photos.length;
+        match.lat = (match.lat * n + p.lat) / (n + 1);
+        match.lng = (match.lng * n + p.lng) / (n + 1);
         match.photos.push(p);
       } else {
         groups.push({
-          id: `${p.lat.toFixed(3)}_${p.lng.toFixed(3)}`,
+          id: `g_${p.id}`,
           lat: p.lat,
           lng: p.lng,
           location: p.location || "未知地点",
@@ -66,21 +112,65 @@ export function MapClient({ photos, collectionsMap, settings }: MapClientProps) 
       }
     }
     return groups.sort((a, b) => b.photos.length - a.photos.length);
-  }, [geoPhotos]);
+  }, [geoPhotos, zoomBucket]);
 
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedPhotoId, setSelectedPhotoId] = useState<number | null>(
+    focusPhotoId > 0 ? focusPhotoId : null
+  );
   const [lightboxList, setLightboxList] = useState<Photo[]>(geoPhotos);
   const [lightboxIdx, setLightboxIdx] = useState<number | null>(null);
 
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
-  const markersRef = useRef<Map<string, { marker: maplibregl.Marker; wrap: HTMLDivElement; btn: HTMLButtonElement }>>(new Map());
+  const markersRef = useRef<
+    Map<string, { marker: maplibregl.Marker; wrap: HTMLDivElement; btn: HTMLButtonElement }>
+  >(new Map());
   const styleKeyRef = useRef("");
 
-  const selectedPlace = useMemo(
-    () => places.find((p) => p.id === selectedId) ?? null,
-    [places, selectedId]
-  );
+  const selectedPlace = useMemo(() => {
+    if (selectedPhotoId === null) return null;
+    return places.find((g) => g.photos.some((p) => p.id === selectedPhotoId)) ?? null;
+  }, [places, selectedPhotoId]);
+
+  const zoomToGroup = (group: PlaceGroup) => {
+    setSelectedPhotoId(group.photos[0]?.id ?? null);
+    const map = mapRef.current;
+    if (!map) return;
+
+    const curZ = map.getZoom();
+    if (group.photos.length > 1) {
+      let minLat = Infinity;
+      let maxLat = -Infinity;
+      let minLng = Infinity;
+      let maxLng = -Infinity;
+      for (const p of group.photos) {
+        if (p.lat < minLat) minLat = p.lat;
+        if (p.lat > maxLat) maxLat = p.lat;
+        if (p.lng < minLng) minLng = p.lng;
+        if (p.lng > maxLng) maxLng = p.lng;
+      }
+      const span = Math.max(maxLat - minLat, maxLng - minLng);
+      // Compute zoom needed so this cluster separates into sub-clusters / exact spots
+      const neededZoom =
+        span < 0.0003
+          ? 12.5
+          : Math.min(13, Math.max(curZ + 2.5, Math.log2(0.45 / (span * 0.65)) + 2.5));
+
+      map.flyTo({
+        center: [group.lng, group.lat],
+        zoom: neededZoom,
+        duration: 820,
+        essential: true,
+      });
+    } else {
+      map.flyTo({
+        center: [group.lng, group.lat],
+        zoom: Math.max(curZ, 11.5),
+        duration: 820,
+        essential: true,
+      });
+    }
+  };
 
   // Initialize MapLibre GL with Chinese-compliant cartographic style
   useEffect(() => {
@@ -89,17 +179,31 @@ export function MapClient({ photos, collectionsMap, settings }: MapClientProps) 
 
     maplibregl.setWorkerUrl("/maplibre-gl-worker.js");
 
+    const focusTarget = focusPhotoId > 0 ? geoPhotos.find((p) => p.id === focusPhotoId) : null;
     const initCenter: [number, number] =
-      qLng !== null && qLat !== null ? [Number(qLng), Number(qLat)] : [52, 30];
-    const initZoom = qZoom !== null ? Number(qZoom) : 1.65;
+      qLng !== null && qLat !== null
+        ? [Number(qLng), Number(qLat)]
+        : focusTarget
+        ? [focusTarget.lng, focusTarget.lat]
+        : [52, 30];
 
     const map = new maplibregl.Map({
       container: mapContainerRef.current,
-      style: { version: 8, sources: {}, layers: [{ id: "bg", type: "background", paint: { "background-color": theme === "dark" ? "#0d0f14" : "#f1f5f9" } }] },
+      style: {
+        version: 8,
+        sources: {},
+        layers: [
+          {
+            id: "bg",
+            type: "background",
+            paint: { "background-color": theme === "dark" ? "#0d0f14" : "#f1f5f9" },
+          },
+        ],
+      },
       center: initCenter,
-      zoom: initZoom,
+      zoom: initialZoom,
       minZoom: 1.2,
-      maxZoom: 15,
+      maxZoom: 16.5,
       attributionControl: false,
       renderWorldCopies: false,
     });
@@ -112,8 +216,14 @@ export function MapClient({ photos, collectionsMap, settings }: MapClientProps) 
       .catch(() => {});
 
     map.on("click", () => {
-      setSelectedId(null);
+      setSelectedPhotoId(null);
     });
+
+    const syncZoom = () => {
+      const rounded = Math.round(map.getZoom() * 2) / 2;
+      setZoomBucket((prev) => (prev === rounded ? prev : rounded));
+    };
+    map.on("zoomend", syncZoom);
 
     const ro = new ResizeObserver(() => {
       map.resize();
@@ -121,14 +231,6 @@ export function MapClient({ photos, collectionsMap, settings }: MapClientProps) 
     ro.observe(mapContainerRef.current);
 
     mapRef.current = map;
-
-    if (focusPhotoId > 0) {
-      const targetGroup = places.find((g) => g.photos.some((p) => p.id === focusPhotoId));
-      if (targetGroup) {
-        setSelectedId(targetGroup.id);
-        map.jumpTo({ center: [targetGroup.lng, targetGroup.lat], zoom: 7.5 });
-      }
-    }
 
     return () => {
       disposed = true;
@@ -176,7 +278,8 @@ export function MapClient({ photos, collectionsMap, settings }: MapClientProps) 
       const img = document.createElement("img");
       img.src = cover.url;
       img.alt = "";
-      img.style.cssText = "width:100%;height:100%;object-fit:cover;border-radius:3px;display:block;pointer-events:none;";
+      img.style.cssText =
+        "width:100%;height:100%;object-fit:cover;border-radius:3px;display:block;pointer-events:none;";
       btn.appendChild(img);
 
       if (group.photos.length > 1) {
@@ -189,13 +292,7 @@ export function MapClient({ photos, collectionsMap, settings }: MapClientProps) 
 
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
-        setSelectedId(group.id);
-        map.flyTo({
-          center: [group.lng, group.lat],
-          zoom: Math.max(map.getZoom(), 5.4),
-          duration: 850,
-          essential: true,
-        });
+        zoomToGroup(group);
       });
 
       wrap.appendChild(btn);
@@ -206,13 +303,15 @@ export function MapClient({ photos, collectionsMap, settings }: MapClientProps) 
 
       markersRef.current.set(group.id, { marker, wrap, btn });
     });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [places]);
 
   // Highlight active marker ring on inner `btn` (never overwriting `wrap.style.transform`!)
   useEffect(() => {
     const isDark = theme === "dark";
+    const activeGroupId = selectedPlace?.id ?? null;
     markersRef.current.forEach(({ wrap, btn }, id) => {
-      const active = id === selectedId;
+      const active = id === activeGroupId;
       wrap.style.zIndex = active ? "20" : "1";
       btn.style.transform = active ? "scale(1.18)" : "scale(1)";
       btn.style.boxShadow = active
@@ -223,20 +322,10 @@ export function MapClient({ photos, collectionsMap, settings }: MapClientProps) 
         ? "0 0 0 1.5px rgba(255,255,255,0.45), 0 6px 16px rgba(0,0,0,0.55)"
         : "0 0 0 1.5px rgba(255,255,255,0.95), 0 6px 16px rgba(15,23,42,0.2)";
     });
-  }, [selectedId, theme]);
-
-  const focusPlace = (group: PlaceGroup) => {
-    setSelectedId(group.id);
-    mapRef.current?.flyTo({
-      center: [group.lng, group.lat],
-      zoom: 5.6,
-      duration: 850,
-      essential: true,
-    });
-  };
+  }, [places, selectedPlace, theme]);
 
   const resetWorldView = () => {
-    setSelectedId(null);
+    setSelectedPhotoId(null);
     mapRef.current?.flyTo({
       center: [52, 30],
       zoom: 1.65,
@@ -249,6 +338,8 @@ export function MapClient({ photos, collectionsMap, settings }: MapClientProps) 
     setLightboxList(list);
     setLightboxIdx(Math.max(0, list.findIndex((p) => p.id === target.id)));
   };
+
+  const isDetailedZoom = zoomBucket >= 8;
 
   return (
     <div className="min-h-dvh flex flex-col">
@@ -295,111 +386,124 @@ export function MapClient({ photos, collectionsMap, settings }: MapClientProps) 
 
           {/* Flush Frosted Glass Side Panel */}
           <aside className="flex w-full lg:w-92 max-h-[38dvh] lg:max-h-none shrink-0 flex-col border-t lg:border-t-0 lg:border-l border-[var(--glass-border)] bg-[var(--glass-strong)] backdrop-blur-2xl backdrop-saturate-180">
-          {selectedPlace ? (
-            <>
-              <div className="flex items-center justify-between gap-3 border-b border-[var(--border)] px-4 py-3 sm:px-6 sm:py-4">
-                <div className="min-w-0">
-                  <button
-                    type="button"
-                    onClick={resetWorldView}
-                    className="inline-flex items-center gap-1 text-xs text-[var(--fg-muted)] hover:text-[var(--fg)] transition cursor-pointer mb-1"
-                  >
-                    <ArrowLeft className="h-3.5 w-3.5" />
-                    <span>{locale === "en" ? "All Locations" : "全部地点"}</span>
-                  </button>
-                  <h2 className="truncate text-base font-semibold text-[var(--fg)]">
-                    {pick(selectedPlace.location, selectedPlace.locationEn)}
-                  </h2>
-                  <div className="inline-flex items-center gap-1 text-xs text-[var(--fg-subtle)]">
-                    <Compass className="h-3 w-3" />
-                    <span>{formatCoord(selectedPlace.lat, selectedPlace.lng)}</span>
-                  </div>
-                </div>
-                <span className="shrink-0 text-xs text-[var(--fg-muted)]">
-                  {selectedPlace.photos.length} {locale === "en" ? "photos" : "幅"}
-                </span>
-              </div>
-
-              <div className="flex-1 overflow-y-auto px-4 py-3.5 sm:px-6 sm:py-5 space-y-4 sm:space-y-5">
-                {selectedPlace.photos.map((photo) => {
-                  const pTitle = pick(photo.title, photo.titleEn);
-                  return (
-                    <figure
-                      key={photo.id}
-                      onClick={() => openPhotoLightbox(photo, selectedPlace.photos)}
-                      className="group cursor-pointer space-y-2"
-                    >
-                      <GalleryImage
-                        photoId={photo.id}
-                        src={photo.url}
-                        alt={pTitle}
-                        ambient={photo.ambient}
-                        blurData={photo.blurData}
-                        aspectRatio={`${photo.width || 1600} / ${photo.height || 1068}`}
-                        className="w-full"
-                      />
-                      <figcaption className="flex items-center justify-between gap-2 text-xs">
-                        <span className="truncate font-medium text-[var(--fg)]">{pTitle}</span>
-                        <span className="inline-flex items-center gap-1 shrink-0 text-[var(--fg-muted)]">
-                          <Aperture className="h-3 w-3 opacity-70" />
-                          {[photo.focalMm ? `${photo.focalMm}mm` : "", photo.aperture].filter(Boolean).join(" ")}
-                        </span>
-                      </figcaption>
-                    </figure>
-                  );
-                })}
-              </div>
-            </>
-          ) : (
-            <>
-              <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-3 sm:px-6 sm:py-4 text-sm">
-                <span className="font-semibold text-[var(--fg)]">
-                  {locale === "en" ? `${places.length} Locations` : `${places.length} 处拍摄地`}
-                </span>
-                <span className="text-xs text-[var(--fg-muted)]">
-                  {locale === "en" ? `${geoPhotos.length} Photos` : `共 ${geoPhotos.length} 幅`}
-                </span>
-              </div>
-
-              <div className="flex-1 overflow-y-auto divide-y divide-[var(--border)]">
-                {places.map((group) => {
-                  const placeTitle = pick(group.location, group.locationEn);
-                  const cover = group.photos[0];
-                  return (
+            {selectedPlace ? (
+              <>
+                <div className="flex items-center justify-between gap-3 border-b border-[var(--border)] px-4 py-3 sm:px-6 sm:py-4">
+                  <div className="min-w-0">
                     <button
-                      key={group.id}
                       type="button"
-                      onClick={() => focusPlace(group)}
-                      className="group flex w-full items-center justify-between gap-3 px-4 py-3 sm:px-6 sm:py-3.5 text-left hover:bg-[var(--bg-subtle)] transition cursor-pointer"
+                      onClick={resetWorldView}
+                      className="inline-flex items-center gap-1 text-xs text-[var(--fg-muted)] hover:text-[var(--fg)] transition cursor-pointer mb-1"
                     >
-                      <div className="flex items-center gap-3.5 min-w-0">
-                        <div className="photo-frame h-10 w-14 shrink-0 overflow-hidden rounded-xs">
-                          <img
-                            src={cover.url}
-                            alt=""
-                            className="h-full w-full object-cover transition duration-300 group-hover:scale-105"
-                          />
-                        </div>
-                        <div className="min-w-0">
-                          <div className="truncate text-sm font-medium text-[var(--fg)]">
-                            {placeTitle}
-                          </div>
-                          <div className="inline-flex items-center gap-1 text-xs text-[var(--fg-subtle)]">
-                            <MapPin className="h-3 w-3 opacity-70" />
-                            <span>{formatCoord(group.lat, group.lng)}</span>
-                          </div>
-                        </div>
-                      </div>
-                      <span className="shrink-0 text-xs text-[var(--fg-muted)]">
-                        {group.photos.length}
-                      </span>
+                      <ArrowLeft className="h-3.5 w-3.5" />
+                      <span>{locale === "en" ? "All Locations" : "全部地点"}</span>
                     </button>
-                  );
-                })}
-              </div>
-            </>
-          )}
-        </aside>
+                    <h2 className="truncate text-base font-semibold text-[var(--fg)]">
+                      {pick(selectedPlace.location, selectedPlace.locationEn)}
+                    </h2>
+                    <div className="inline-flex items-center gap-1 text-xs text-[var(--fg-subtle)]">
+                      <Compass className="h-3 w-3" />
+                      <span>
+                        {formatCoord(
+                          selectedPlace.photos[0]?.lat ?? selectedPlace.lat,
+                          selectedPlace.photos[0]?.lng ?? selectedPlace.lng,
+                          true
+                        )}
+                      </span>
+                    </div>
+                  </div>
+                  <span className="shrink-0 text-xs text-[var(--fg-muted)]">
+                    {selectedPlace.photos.length} {locale === "en" ? "photos" : "幅"}
+                  </span>
+                </div>
+
+                <div className="flex-1 overflow-y-auto px-4 py-3.5 sm:px-6 sm:py-5 space-y-4 sm:space-y-5">
+                  {selectedPlace.photos.map((photo) => {
+                    const pTitle = pick(photo.title, photo.titleEn);
+                    return (
+                      <figure
+                        key={photo.id}
+                        onClick={() => openPhotoLightbox(photo, selectedPlace.photos)}
+                        className="group cursor-pointer space-y-2"
+                      >
+                        <GalleryImage
+                          photoId={photo.id}
+                          src={photo.url}
+                          alt={pTitle}
+                          ambient={photo.ambient}
+                          blurData={photo.blurData}
+                          aspectRatio={`${photo.width || 1600} / ${photo.height || 1068}`}
+                          className="w-full"
+                        />
+                        <figcaption className="flex items-center justify-between gap-2 text-xs">
+                          <span className="truncate font-medium text-[var(--fg)]">{pTitle}</span>
+                          <span className="inline-flex items-center gap-1 shrink-0 text-[var(--fg-muted)]">
+                            <Aperture className="h-3 w-3 opacity-70" />
+                            {[photo.focalMm ? `${photo.focalMm}mm` : "", photo.aperture]
+                              .filter(Boolean)
+                              .join(" ")}
+                          </span>
+                        </figcaption>
+                      </figure>
+                    );
+                  })}
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-3 sm:px-6 sm:py-4 text-sm">
+                  <span className="font-semibold text-[var(--fg)]">
+                    {locale === "en"
+                      ? `${places.length} ${isDetailedZoom ? "Spots" : "Locations"}`
+                      : `${places.length} 处${isDetailedZoom ? "机位" : "拍摄地"}`}
+                  </span>
+                  <span className="text-xs text-[var(--fg-muted)]">
+                    {locale === "en" ? `${geoPhotos.length} Photos` : `共 ${geoPhotos.length} 幅`}
+                  </span>
+                </div>
+
+                <div className="flex-1 overflow-y-auto divide-y divide-[var(--border)]">
+                  {places.map((group) => {
+                    const cover = group.photos[0];
+                    const placeTitle =
+                      isDetailedZoom && group.photos.length === 1
+                        ? `${pick(cover.title, cover.titleEn)} · ${pick(group.location, group.locationEn)}`
+                        : pick(group.location, group.locationEn);
+                    return (
+                      <button
+                        key={group.id}
+                        type="button"
+                        onClick={() => zoomToGroup(group)}
+                        className="group flex w-full items-center justify-between gap-3 px-4 py-3 sm:px-6 sm:py-3.5 text-left hover:bg-[var(--bg-subtle)] transition cursor-pointer"
+                      >
+                        <div className="flex items-center gap-3.5 min-w-0">
+                          <div className="photo-frame h-10 w-14 shrink-0 overflow-hidden rounded-xs">
+                            <img
+                              src={cover.url}
+                              alt=""
+                              className="h-full w-full object-cover transition duration-300 group-hover:scale-105"
+                            />
+                          </div>
+                          <div className="min-w-0">
+                            <div className="truncate text-sm font-medium text-[var(--fg)]">
+                              {placeTitle}
+                            </div>
+                            <div className="inline-flex items-center gap-1 text-xs text-[var(--fg-subtle)]">
+                              <MapPin className="h-3 w-3 opacity-70" />
+                              <span>{formatCoord(cover.lat, cover.lng, isDetailedZoom)}</span>
+                            </div>
+                          </div>
+                        </div>
+                        <span className="shrink-0 text-xs text-[var(--fg-muted)]">
+                          {group.photos.length}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+          </aside>
         </div>
       </main>
 

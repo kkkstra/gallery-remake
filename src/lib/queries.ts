@@ -8,15 +8,17 @@ export interface CollectionWithPhotos extends Collection {
   photoCount: number;
 }
 
-export async function getAllPhotos(): Promise<Photo[]> {
+export async function getAllPhotos(opts?: { includeHidden?: boolean }): Promise<Photo[]> {
   await ensureDb();
-  return db.select().from(photos).orderBy(asc(photos.sortOrder), desc(photos.id));
+  const rows = await db.select().from(photos).orderBy(asc(photos.sortOrder), desc(photos.id));
+  return opts?.includeHidden ? rows : rows.filter((p) => !p.hidden);
 }
 
-export async function getPhotoById(id: number): Promise<Photo | null> {
+export async function getPhotoById(id: number, opts?: { includeHidden?: boolean }): Promise<Photo | null> {
   await ensureDb();
   const row = await db.select().from(photos).where(eq(photos.id, id)).get();
-  return row ?? null;
+  if (!row || (!opts?.includeHidden && row.hidden)) return null;
+  return row;
 }
 
 export async function getFeaturedPhotos(): Promise<Photo[]> {
@@ -25,11 +27,11 @@ export async function getFeaturedPhotos(): Promise<Photo[]> {
   return featured.length > 0 ? featured : all.slice(0, 8);
 }
 
-export async function getCollectionsWithPhotos(): Promise<CollectionWithPhotos[]> {
+export async function getCollectionsWithPhotos(opts?: { includeHidden?: boolean }): Promise<CollectionWithPhotos[]> {
   await ensureDb();
   const cols = await db.select().from(collections).orderBy(asc(collections.sortOrder), desc(collections.id));
   const links = await db.select().from(collectionPhotos).orderBy(asc(collectionPhotos.sortOrder));
-  const allPhotos = await getAllPhotos();
+  const allPhotos = await getAllPhotos(opts);
   const photoMap = new Map(allPhotos.map((p) => [p.id, p]));
 
   return cols.map((col) => {
@@ -66,10 +68,10 @@ export async function getPhotoCollectionsMap(): Promise<Record<number, { slug: s
   return result;
 }
 
-export async function getAllGear(): Promise<(GearItem & { photoCount: number })[]> {
+export async function getAllGear(opts?: { includeHidden?: boolean }): Promise<(GearItem & { photoCount: number })[]> {
   await ensureDb();
   const items = await db.select().from(gear).orderBy(asc(gear.sortOrder), asc(gear.id));
-  const allPhotos = await getAllPhotos();
+  const allPhotos = await getAllPhotos(opts);
   return items.map((item) => {
     const count = allPhotos.filter((p) =>
       item.type === "camera" ? p.camera === item.name : p.lens === item.name

@@ -33,17 +33,29 @@ export async function POST(req: Request) {
   const ambient = String(form.get("ambient") || "#1e2024");
   const category = String(form.get("category") || "landscape");
   const featured = form.get("featured") === "true";
+  const hidden = form.get("hidden") === "true";
   const collectionId = Number(form.get("collectionId") || 0);
+  const customTitle = String(form.get("title") || "").trim();
+  const titleEn = String(form.get("titleEn") || "").trim();
+  const description = String(form.get("description") || "").trim();
+  const descriptionEn = String(form.get("descriptionEn") || "").trim();
+  const location = String(form.get("location") || "").trim();
+  const locationEn = String(form.get("locationEn") || "").trim();
+  const rawLat = form.get("lat");
+  const rawLng = form.get("lng");
+  const pickedLat = rawLat !== null && rawLat !== "" && Number.isFinite(Number(rawLat)) ? Number(rawLat) : null;
+  const pickedLng = rawLng !== null && rawLng !== "" && Number.isFinite(Number(rawLng)) ? Number(rawLng) : null;
+  const overrideExif = form.get("overrideExif") === "true";
 
   const rawTitle = path.basename(file.name, path.extname(file.name)).replace(/[-_]+/g, " ").trim();
 
   const [created] = await db
     .insert(photos)
     .values({
-      title: rawTitle || "未命名作品",
-      titleEn: "",
-      description: "",
-      descriptionEn: "",
+      title: customTitle || rawTitle || "未命名作品",
+      titleEn,
+      description,
+      descriptionEn,
       url,
       width: exif.width || clientWidth || 1600,
       height: exif.height || clientHeight || 1068,
@@ -51,12 +63,13 @@ export async function POST(req: Request) {
       blurData,
       category,
       featured,
+      hidden,
       sortOrder: 0,
-      takenAt: exif.takenAt,
-      location: "",
-      locationEn: "",
-      lat: exif.lat,
-      lng: exif.lng,
+      takenAt: String(form.get("takenAt") || "").trim() || exif.takenAt,
+      location,
+      locationEn,
+      lat: overrideExif && pickedLat !== null ? pickedLat : exif.lat ?? pickedLat,
+      lng: overrideExif && pickedLng !== null ? pickedLng : exif.lng ?? pickedLng,
       camera: exif.camera,
       lens: exif.lens,
       focalMm: exif.focalMm,

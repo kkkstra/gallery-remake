@@ -15,13 +15,13 @@ import {
   Focus,
   Frame,
   Gauge,
+  Info,
   Layers,
   MapPin,
   Maximize,
   Maximize2,
   Minimize,
   Palette,
-  PanelRight,
   Pause,
   Play,
   ScanSearch,
@@ -865,7 +865,7 @@ export function Lightbox({
                 showPanel ? "text-[var(--fg)]" : "hover:text-[var(--fg)]"
               }`}
             >
-              <PanelRight className="h-[17px] w-[17px] sm:h-[18px] sm:w-[18px] stroke-[1.6]" />
+              <Info className="h-[17px] w-[17px] sm:h-[18px] sm:w-[18px] stroke-[1.6]" />
             </button>
 
             <button
@@ -888,7 +888,7 @@ export function Lightbox({
             if (loupeEnabled) syncLoupeAt(e.clientX, e.clientY);
           }}
           onPointerLeave={() => setLoupePos(null)}
-          className="relative flex flex-1 min-h-0 items-center justify-center overflow-hidden px-3 sm:px-16 py-2"
+          className="relative flex flex-1 min-h-0 items-center justify-center overflow-hidden px-3 sm:px-20 py-2"
         >
           {/* Subtle Restrained Stage Depth behind the Photograph */}
           {!closing && (
@@ -908,9 +908,9 @@ export function Lightbox({
               type="button"
               onClick={() => onChangeIndex((activeIndex - 1 + photos.length) % photos.length)}
               aria-label="上一张"
-              className="hidden sm:inline-flex absolute left-3 sm:left-5 z-20 rounded-full p-2.5 text-[var(--fg-muted)] hover:bg-[var(--bg-subtle)] hover:text-[var(--fg)] transition cursor-pointer"
+              className="hidden sm:inline-flex absolute left-3.5 z-20 h-11 w-11 items-center justify-center rounded-full text-[var(--fg-muted)] hover:bg-[var(--bg-subtle)] hover:text-[var(--fg)] transition cursor-pointer"
             >
-              <ChevronLeft className="h-7 w-7 stroke-[1.5]" />
+              <ChevronLeft className="h-6 w-6 stroke-[1.6]" />
             </button>
           )}
 
@@ -932,8 +932,8 @@ export function Lightbox({
                 src={prevPhotoUrl}
                 alt=""
                 aria-hidden="true"
-                className={`pointer-events-none absolute inset-0 m-auto object-contain opacity-65 blur-[2px] ${
-                  matted ? "max-h-[66dvh] max-w-[86vw] sm:max-h-[64dvh] sm:max-w-[74vw]" : "max-h-[76dvh] sm:max-h-[75dvh] max-w-full"
+                className={`pointer-events-none absolute inset-0 m-auto object-contain opacity-65 blur-[2px] max-w-full ${
+                  matted ? "max-h-[66dvh] sm:max-h-[64dvh]" : "max-h-[76dvh] sm:max-h-[75dvh]"
                 }`}
               />
             )}
@@ -956,8 +956,8 @@ export function Lightbox({
                 transform: `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${scale})`,
                 transition: dragging ? "none" : "transform 240ms cubic-bezier(0.22, 1, 0.36, 1)",
               }}
-              className={`object-contain touch-none animate-photo-switch ${
-                matted && !isZoomed ? "max-h-[66dvh] max-w-[86vw] sm:max-h-[64dvh] sm:max-w-[74vw]" : "max-h-[76dvh] sm:max-h-[75dvh] max-w-full"
+              className={`object-contain touch-none animate-photo-switch max-w-full ${
+                matted && !isZoomed ? "max-h-[66dvh] sm:max-h-[64dvh]" : "max-h-[76dvh] sm:max-h-[75dvh]"
               } ${
                 loupeEnabled && loupePos
                   ? "cursor-none"
@@ -1002,9 +1002,9 @@ export function Lightbox({
               type="button"
               onClick={() => onChangeIndex((activeIndex + 1) % photos.length)}
               aria-label="下一张"
-              className="hidden sm:inline-flex absolute right-3 sm:right-5 z-20 rounded-full p-2.5 text-[var(--fg-muted)] hover:bg-[var(--bg-subtle)] hover:text-[var(--fg)] transition cursor-pointer"
+              className="hidden sm:inline-flex absolute right-3.5 z-20 h-11 w-11 items-center justify-center rounded-full text-[var(--fg-muted)] hover:bg-[var(--bg-subtle)] hover:text-[var(--fg)] transition cursor-pointer"
             >
-              <ChevronRight className="h-7 w-7 stroke-[1.5]" />
+              <ChevronRight className="h-6 w-6 stroke-[1.6]" />
             </button>
           )}
         </div>

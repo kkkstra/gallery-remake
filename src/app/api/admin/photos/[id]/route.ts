@@ -4,11 +4,26 @@ import { isAdminAuthenticated } from "@/lib/auth";
 import { db, ensureDb } from "@/lib/db";
 import { collectionPhotos, photos } from "@/lib/db/schema";
 
+export async function GET(
+  req: Request,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  if (!(await isAdminAuthenticated(req))) {
+    return NextResponse.json({ error: "未授权" }, { status: 401 });
+  }
+  await ensureDb();
+  const id = Number((await params).id);
+  const photo = await db.select().from(photos).where(eq(photos.id, id)).get();
+  if (!photo) return NextResponse.json({ error: "未找到作品" }, { status: 404 });
+  const links = await db.select().from(collectionPhotos).where(eq(collectionPhotos.photoId, id));
+  return NextResponse.json({ photo, collectionIds: links.map((l) => l.collectionId) });
+}
+
 export async function PATCH(
   req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  if (!(await isAdminAuthenticated())) {
+  if (!(await isAdminAuthenticated(req))) {
     return NextResponse.json({ error: "未授权" }, { status: 401 });
   }
   await ensureDb();
@@ -39,6 +54,7 @@ export async function PATCH(
   if ("width" in body) patch.width = Number(body.width) || 1600;
   if ("height" in body) patch.height = Number(body.height) || 1068;
   if ("featured" in body) patch.featured = Boolean(body.featured);
+  if ("hidden" in body) patch.hidden = Boolean(body.hidden);
   if ("sortOrder" in body) patch.sortOrder = Number(body.sortOrder) || 0;
   if ("focalMm" in body) patch.focalMm = body.focalMm ? Number(body.focalMm) : null;
   if ("iso" in body) patch.iso = body.iso ? Number(body.iso) : null;

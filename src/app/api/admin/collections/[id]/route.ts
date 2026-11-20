@@ -3,33 +3,47 @@ import { eq } from "drizzle-orm";
 import { isAdminAuthenticated } from "@/lib/auth";
 import { db, ensureDb } from "@/lib/db";
 import { collectionPhotos, collections } from "@/lib/db/schema";
-import { setCollectionPhotoIds } from "@/lib/queries";
+import { getCollectionsWithPhotos, setCollectionPhotoIds } from "@/lib/queries";
+
+export async function GET(
+  req: Request,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  if (!(await isAdminAuthenticated(req))) {
+    return NextResponse.json({ error: "未授权" }, { status: 401 });
+  }
+  const id = Number((await params).id);
+  const all = await getCollectionsWithPhotos({ includeHidden: true });
+  const col = all.find((c) => c.id === id);
+  if (!col) return NextResponse.json({ error: "未找到影集" }, { status: 404 });
+  return NextResponse.json({ collection: col });
+}
 
 export async function PATCH(
   req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  if (!(await isAdminAuthenticated())) {
+  if (!(await isAdminAuthenticated(req))) {
     return NextResponse.json({ error: "未授权" }, { status: 401 });
   }
   await ensureDb();
   const id = Number((await params).id);
   const body = await req.json();
 
-  await db
-    .update(collections)
-    .set({
-      slug: String(body.slug || "").trim(),
-      title: String(body.title || ""),
-      titleEn: String(body.titleEn || ""),
-      description: String(body.description || ""),
-      descriptionEn: String(body.descriptionEn || ""),
-      coverUrl: String(body.coverUrl || ""),
-      period: String(body.period || ""),
-      ...(typeof body.blocksJson === "string" ? { blocksJson: body.blocksJson } : {}),
-      sortOrder: Number(body.sortOrder) || 0,
-    })
-    .where(eq(collections.id, id));
+  const patch: Record<string, unknown> = {};
+  if ("slug" in body && body.slug) patch.slug = String(body.slug).trim();
+  if ("title" in body) patch.title = String(body.title ?? "");
+  if ("titleEn" in body) patch.titleEn = String(body.titleEn ?? "");
+  if ("description" in body) patch.description = String(body.description ?? "");
+  if ("descriptionEn" in body) patch.descriptionEn = String(body.descriptionEn ?? "");
+  if ("coverUrl" in body) patch.coverUrl = String(body.coverUrl ?? "");
+  if ("period" in body) patch.period = String(body.period ?? "");
+  if (typeof body.blocksJson === "string") patch.blocksJson = body.blocksJson;
+  if ("sortOrder" in body) patch.sortOrder = Number(body.sortOrder) || 0;
+
+  if (Object.keys(patch).length > 0) {
+    await db.update(collections).set(patch).where(eq(collections.id, id));
+  }
 
   if (Array.isArray(body.photoIds)) {
     await setCollectionPhotoIds(id, body.photoIds.map(Number));

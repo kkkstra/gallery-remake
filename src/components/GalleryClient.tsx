@@ -4,6 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   Aperture,
+  ArrowDownUp,
   Building2,
   Camera,
   ChevronDown,
@@ -25,7 +26,12 @@ import { SiteFooter } from "./SiteFooter";
 import { Lightbox } from "./Lightbox";
 import { GalleryImage } from "./GalleryImage";
 import { usePreferences } from "./PreferencesProvider";
-import { CameraIllustration, LensIllustration } from "./GearIllustrations";
+import {
+  CameraIllustration,
+  LensIllustration,
+  parseCameraLabel,
+  parseLensHeadline,
+} from "./GearIllustrations";
 
 interface GalleryClientProps {
   photos: Photo[];
@@ -39,21 +45,6 @@ function CategoryIcon({ cat }: { cat: string }) {
   if (cat === "architecture") return <Building2 className="h-4 w-4 opacity-75" />;
   if (cat === "portrait") return <User className="h-4 w-4 opacity-75" />;
   return <Tag className="h-4 w-4 opacity-75" />;
-}
-
-function parseCameraLabel(full: string): { brand: string; model: string } {
-  const parts = full.trim().split(/\s+/);
-  if (parts.length <= 1) return { brand: "", model: full };
-  return { brand: parts[0], model: parts.slice(1).join(" ") };
-}
-
-function parseLensHeadline(lens: string, fallbackFocal?: number | null): { spec: string; sub: string } {
-  const focalMatch = lens.match(/(\d{2,3})\s*mm/i) || lens.match(/\/(\d{2,3})V?\b/i);
-  const focal = focalMatch ? `${focalMatch[1]}mm` : fallbackFocal ? `${fallbackFocal}mm` : "";
-  const apMatch = lens.match(/f\/(\d+(?:\.\d+)?)/i) || lens.match(/\b(\d+(?:[.,]\d+)?)\/\d{2,3}/);
-  const ap = apMatch ? `f/${apMatch[1].replace(",", ".")}` : "";
-  const spec = [focal, ap].filter(Boolean).join(" ");
-  return { spec: spec || lens, sub: lens };
 }
 
 const TARGET_ROW_RATIO = 4.3;
@@ -97,10 +88,13 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
   const qView = searchParams.get("view");
   const initialView: "mosaic" | "index" | "sheet" =
     qView === "index" ? "index" : qView === "sheet" ? "sheet" : "mosaic";
+  const initialSort: "default" | "time" =
+    searchParams.get("sort") === "time" ? "time" : "default";
 
   const [category, setCategoryState] = useState(initialCat);
   const [camera, setCameraState] = useState(initialCamera);
   const [lens, setLensState] = useState(initialLens);
+  const [sortBy, setSortBy] = useState<"default" | "time">(initialSort);
   const [gearTab, setGearTab] = useState<"camera" | "lens">(
     initialLens !== "all" && initialCamera === "all" ? "lens" : "camera"
   );
@@ -146,6 +140,12 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
     if (next === view) return;
     captureSnapshot();
     setViewState(next);
+  };
+
+  const changeSort = (next: "default" | "time") => {
+    if (next === sortBy) return;
+    captureSnapshot();
+    setSortBy(next);
   };
 
   const resetFilters = () => {
@@ -214,7 +214,7 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
         );
       }
     });
-  }, [view, category, camera, lens]);
+  }, [view, category, camera, lens, sortBy]);
 
   const categories = useMemo(() => {
     const map = new Map<string, number>();
@@ -252,7 +252,7 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
         focalMm: info.focalMm,
         ...parseLensHeadline(name, info.focalMm),
       }))
-      .sort((a, b) => a.focalMm - b.focalMm || a.name.localeCompare(b.name));
+      .sort((a, b) => a.sortFocal - b.sortFocal || a.name.localeCompare(b.name));
   }, [camera, category, gearTab, photos]);
 
   const filtered = useMemo(() => {
@@ -263,8 +263,12 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
         if (lens !== "all" && p.lens !== lens) return false;
         return true;
       })
-      .sort((a, b) => (b.takenAt || "").localeCompare(a.takenAt || "") || a.sortOrder - b.sortOrder);
-  }, [camera, category, lens, photos]);
+      .sort((a, b) =>
+        sortBy === "time"
+          ? (b.takenAt || "").localeCompare(a.takenAt || "") || a.sortOrder - b.sortOrder || b.id - a.id
+          : a.sortOrder - b.sortOrder || b.id - a.id
+      );
+  }, [camera, category, lens, photos, sortBy]);
 
   // Sync URL query params (e.g. when jumping from Global ⌘K Search)
   useEffect(() => {
@@ -277,8 +281,10 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
       setCategoryState("all");
       setCameraState("all");
       setLensState("all");
-      const sortedAll = [...photos].sort(
-        (a, b) => (b.takenAt || "").localeCompare(a.takenAt || "") || a.sortOrder - b.sortOrder
+      const sortedAll = [...photos].sort((a, b) =>
+        sortBy === "time"
+          ? (b.takenAt || "").localeCompare(a.takenAt || "") || a.sortOrder - b.sortOrder || b.id - a.id
+          : a.sortOrder - b.sortOrder || b.id - a.id
       );
       const idx = sortedAll.findIndex((p) => p.id === qPhotoId);
       if (idx >= 0) setLightboxIdx(idx);
@@ -404,8 +410,9 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
 
       {/* Toolbar & Collapsible Gear Filter */}
       <div className="mx-auto w-full max-w-[1440px] px-4 py-3 sm:px-9 sm:py-4 border-b border-[var(--border)]">
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-4 sm:gap-5 overflow-x-auto no-scrollbar whitespace-nowrap text-sm sm:text-[15px]">
+        <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+          {/* Mobile Dedicated Row 1: Category Tabs */}
+          <div className="flex w-full sm:w-auto items-center gap-4 sm:gap-5 overflow-x-auto no-scrollbar whitespace-nowrap border-b border-[var(--border)] pb-2 sm:border-b-0 sm:pb-0 text-sm sm:text-[15px]">
             <button
               type="button"
               onClick={() => changeCategory("all")}
@@ -438,77 +445,111 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
             ))}
           </div>
 
-          <div className="flex shrink-0 items-center gap-1.5 sm:gap-2.5">
-            {hasActiveFilter && (
-              <button
-                type="button"
-                onClick={resetFilters}
-                className="inline-flex items-center gap-1 rounded-md border border-[var(--border)] px-2 sm:px-2.5 py-1.5 text-xs text-[var(--fg-muted)] hover:text-[var(--fg)] transition cursor-pointer"
-              >
-                <X className="h-3.5 w-3.5" />
-                <span className="hidden sm:inline">{locale === "en" ? "Reset" : "重置"}</span>
-              </button>
-            )}
-
-            <button
-              type="button"
-              onClick={() => setGearOpen((v) => !v)}
-              className={`inline-flex items-center gap-1 sm:gap-1.5 rounded-md border px-2.5 sm:px-3 py-1.5 text-xs sm:text-sm transition cursor-pointer ${
-                camera !== "all" || lens !== "all"
-                  ? "border-[var(--fg)] bg-[var(--fg)] text-[var(--bg)] font-medium"
-                  : "border-[var(--border)] bg-[var(--bg-elevated)] text-[var(--fg)] hover:opacity-85"
-              }`}
+          {/* Mobile Row 2 / Desktop Right: Sort Switcher + Gear Filter + View Switcher */}
+          <div className="flex w-full sm:w-auto shrink-0 items-center justify-between sm:justify-end gap-2 sm:gap-2.5">
+            {/* Curated Default vs Chronological Time Sort Toggle */}
+            <div
+              role="group"
+              aria-label={locale === "en" ? "Sort order" : "排序方式"}
+              className="inline-flex items-center rounded-md border border-[var(--border)] bg-[var(--bg-elevated)] p-0.5 text-xs"
             >
-              <SlidersHorizontal className="h-3.5 w-3.5 shrink-0" />
-              <span className="max-w-[108px] sm:max-w-none truncate">{filterButtonText}</span>
-              <ChevronDown
-                className={`h-3.5 w-3.5 shrink-0 transition-transform duration-250 ${
-                  gearOpen ? "rotate-180" : ""
+              <ArrowDownUp className="ml-1.5 mr-1 h-3.5 w-3.5 text-[var(--fg-subtle)] shrink-0" />
+              <button
+                type="button"
+                onClick={() => changeSort("default")}
+                className={`rounded px-2 py-1 transition cursor-pointer ${
+                  sortBy === "default"
+                    ? "bg-[var(--fg)] text-[var(--bg)] font-medium"
+                    : "text-[var(--fg-muted)] hover:text-[var(--fg)]"
                 }`}
-              />
-            </button>
+              >
+                {locale === "en" ? "Curated" : "默认"}
+              </button>
+              <button
+                type="button"
+                onClick={() => changeSort("time")}
+                className={`rounded px-2 py-1 transition cursor-pointer ${
+                  sortBy === "time"
+                    ? "bg-[var(--fg)] text-[var(--bg)] font-medium"
+                    : "text-[var(--fg-muted)] hover:text-[var(--fg)]"
+                }`}
+              >
+                {locale === "en" ? "Latest" : "时间"}
+              </button>
+            </div>
 
-            {/* Icon-Only View Switcher */}
-            <div className="flex items-center rounded-md border border-[var(--border)] overflow-hidden">
+            <div className="flex items-center gap-1.5 sm:gap-2.5">
+              {hasActiveFilter && (
+                <button
+                  type="button"
+                  onClick={resetFilters}
+                  className="inline-flex items-center gap-1 rounded-md border border-[var(--border)] px-2 sm:px-2.5 py-1.5 text-xs text-[var(--fg-muted)] hover:text-[var(--fg)] transition cursor-pointer"
+                >
+                  <X className="h-3.5 w-3.5" />
+                  <span className="hidden sm:inline">{locale === "en" ? "Reset" : "重置"}</span>
+                </button>
+              )}
+
               <button
                 type="button"
-                onClick={() => changeView("mosaic")}
-                aria-label={locale === "en" ? "Mosaic View" : "密铺视图"}
-                title={locale === "en" ? "Mosaic View" : "密铺视图"}
-                className={`p-2 transition-colors duration-200 cursor-pointer ${
-                  view === "mosaic"
-                    ? "bg-[var(--fg)] text-[var(--bg)]"
-                    : "bg-[var(--bg-elevated)] text-[var(--fg-muted)] hover:text-[var(--fg)]"
+                onClick={() => setGearOpen((v) => !v)}
+                className={`inline-flex items-center gap-1 sm:gap-1.5 rounded-md border px-2.5 sm:px-3 py-1.5 text-xs sm:text-sm transition cursor-pointer ${
+                  camera !== "all" || lens !== "all"
+                    ? "border-[var(--fg)] bg-[var(--fg)] text-[var(--bg)] font-medium"
+                    : "border-[var(--border)] bg-[var(--bg-elevated)] text-[var(--fg)] hover:opacity-85"
                 }`}
               >
-                <Rows3 className="h-4 w-4" />
+                <SlidersHorizontal className="h-3.5 w-3.5 shrink-0" />
+                <span className="max-w-[108px] sm:max-w-none truncate">{filterButtonText}</span>
+                <ChevronDown
+                  className={`h-3.5 w-3.5 shrink-0 transition-transform duration-250 ${
+                    gearOpen ? "rotate-180" : ""
+                  }`}
+                />
               </button>
-              <button
-                type="button"
-                onClick={() => changeView("index")}
-                aria-label={locale === "en" ? "Index View" : "索引视图"}
-                title={locale === "en" ? "Index View" : "索引视图"}
-                className={`p-2 transition-colors duration-200 cursor-pointer ${
-                  view === "index"
-                    ? "bg-[var(--fg)] text-[var(--bg)]"
-                    : "bg-[var(--bg-elevated)] text-[var(--fg-muted)] hover:text-[var(--fg)]"
-                }`}
-              >
-                <LayoutGrid className="h-4 w-4" />
-              </button>
-              <button
-                type="button"
-                onClick={() => changeView("sheet")}
-                aria-label={locale === "en" ? "Contact Sheet" : "接触印相表"}
-                title={locale === "en" ? "Contact Sheet" : "接触印相表"}
-                className={`p-2 transition-colors duration-200 cursor-pointer ${
-                  view === "sheet"
-                    ? "bg-[var(--fg)] text-[var(--bg)]"
-                    : "bg-[var(--bg-elevated)] text-[var(--fg-muted)] hover:text-[var(--fg)]"
-                }`}
-              >
-                <Grid3x3 className="h-4 w-4" />
-              </button>
+
+              {/* Icon-Only View Switcher */}
+              <div className="flex items-center rounded-md border border-[var(--border)] overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => changeView("mosaic")}
+                  aria-label={locale === "en" ? "Mosaic View" : "密铺视图"}
+                  title={locale === "en" ? "Mosaic View" : "密铺视图"}
+                  className={`p-2 transition-colors duration-200 cursor-pointer ${
+                    view === "mosaic"
+                      ? "bg-[var(--fg)] text-[var(--bg)]"
+                      : "bg-[var(--bg-elevated)] text-[var(--fg-muted)] hover:text-[var(--fg)]"
+                  }`}
+                >
+                  <Rows3 className="h-4 w-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => changeView("index")}
+                  aria-label={locale === "en" ? "Index View" : "索引视图"}
+                  title={locale === "en" ? "Index View" : "索引视图"}
+                  className={`p-2 transition-colors duration-200 cursor-pointer ${
+                    view === "index"
+                      ? "bg-[var(--fg)] text-[var(--bg)]"
+                      : "bg-[var(--bg-elevated)] text-[var(--fg-muted)] hover:text-[var(--fg)]"
+                  }`}
+                >
+                  <LayoutGrid className="h-4 w-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => changeView("sheet")}
+                  aria-label={locale === "en" ? "Contact Sheet" : "接触印相表"}
+                  title={locale === "en" ? "Contact Sheet" : "接触印相表"}
+                  className={`p-2 transition-colors duration-200 cursor-pointer ${
+                    view === "sheet"
+                      ? "bg-[var(--fg)] text-[var(--bg)]"
+                      : "bg-[var(--bg-elevated)] text-[var(--fg-muted)] hover:text-[var(--fg)]"
+                  }`}
+                >
+                  <Grid3x3 className="h-4 w-4" />
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -816,8 +857,8 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
         )}
       </div>
 
-      {/* Right-Edge Minimal Optical Timeline Scale */}
-      {timelineEntries.length >= 2 && lightboxIdx === null && (
+      {/* Right-Edge Minimal Optical Timeline Scale (Chronological Time Sort) */}
+      {sortBy === "time" && timelineEntries.length >= 2 && lightboxIdx === null && (
         <aside
           aria-label={locale === "en" ? "Timeline" : "拍摄时间刻度尺"}
           className="fixed right-2 sm:right-3 top-1/2 -translate-y-1/2 z-20 hidden md:flex items-center gap-2 select-none"

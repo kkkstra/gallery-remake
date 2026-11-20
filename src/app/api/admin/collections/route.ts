@@ -3,10 +3,18 @@ import { eq } from "drizzle-orm";
 import { isAdminAuthenticated } from "@/lib/auth";
 import { db, ensureDb } from "@/lib/db";
 import { collections } from "@/lib/db/schema";
-import { setCollectionPhotoIds } from "@/lib/queries";
+import { getCollectionsWithPhotos, setCollectionPhotoIds } from "@/lib/queries";
+
+export async function GET(req: Request) {
+  if (!(await isAdminAuthenticated(req))) {
+    return NextResponse.json({ error: "未授权" }, { status: 401 });
+  }
+  const list = await getCollectionsWithPhotos({ includeHidden: true });
+  return NextResponse.json({ collections: list });
+}
 
 export async function POST(req: Request) {
-  if (!(await isAdminAuthenticated())) {
+  if (!(await isAdminAuthenticated(req))) {
     return NextResponse.json({ error: "未授权" }, { status: 401 });
   }
   await ensureDb();

@@ -48,6 +48,7 @@ async function bootstrapDb() {
       blur_data TEXT NOT NULL DEFAULT '',
       category TEXT NOT NULL DEFAULT 'landscape',
       featured INTEGER NOT NULL DEFAULT 0,
+      hidden INTEGER NOT NULL DEFAULT 0,
       sort_order INTEGER NOT NULL DEFAULT 0,
       taken_at TEXT NOT NULL DEFAULT '',
       location TEXT NOT NULL DEFAULT '',
@@ -108,6 +109,11 @@ async function bootstrapDb() {
   }
   try {
     await client.execute("ALTER TABLE collections ADD COLUMN blocks_json TEXT NOT NULL DEFAULT ''");
+  } catch {
+    // Column already exists
+  }
+  try {
+    await client.execute("ALTER TABLE photos ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0");
   } catch {
     // Column already exists
   }

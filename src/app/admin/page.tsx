@@ -22,9 +22,9 @@ export default async function AdminPage() {
   }
 
   const [photos, collections, gear, settings] = await Promise.all([
-    getAllPhotos(),
-    getCollectionsWithPhotos(),
-    getAllGear(),
+    getAllPhotos({ includeHidden: true }),
+    getCollectionsWithPhotos({ includeHidden: true }),
+    getAllGear({ includeHidden: true }),
     getSiteSettings(),
   ]);
 

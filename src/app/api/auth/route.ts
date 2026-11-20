@@ -7,7 +7,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "密码不正确" }, { status: 401 });
   }
   const token = await createAdminToken();
-  const res = NextResponse.json({ ok: true });
+  const res = NextResponse.json({ ok: true, token });
   res.cookies.set(COOKIE_NAME, token, {
     httpOnly: true,
     sameSite: "lax",

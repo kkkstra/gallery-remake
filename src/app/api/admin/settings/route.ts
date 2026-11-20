@@ -2,9 +2,18 @@ import { NextResponse } from "next/server";
 import { isAdminAuthenticated } from "@/lib/auth";
 import { db, ensureDb } from "@/lib/db";
 import { siteSettings } from "@/lib/db/schema";
+import { getSiteSettings } from "@/lib/queries";
+
+export async function GET(req: Request) {
+  if (!(await isAdminAuthenticated(req))) {
+    return NextResponse.json({ error: "未授权" }, { status: 401 });
+  }
+  const settings = await getSiteSettings();
+  return NextResponse.json({ settings });
+}
 
 export async function PUT(req: Request) {
-  if (!(await isAdminAuthenticated())) {
+  if (!(await isAdminAuthenticated(req))) {
     return NextResponse.json({ error: "未授权" }, { status: 401 });
   }
   await ensureDb();

@@ -3,9 +3,18 @@ import { eq } from "drizzle-orm";
 import { isAdminAuthenticated } from "@/lib/auth";
 import { db, ensureDb } from "@/lib/db";
 import { gear } from "@/lib/db/schema";
+import { getAllGear } from "@/lib/queries";
+
+export async function GET(req: Request) {
+  if (!(await isAdminAuthenticated(req))) {
+    return NextResponse.json({ error: "未授权" }, { status: 401 });
+  }
+  const items = await getAllGear({ includeHidden: true });
+  return NextResponse.json({ gear: items });
+}
 
 export async function POST(req: Request) {
-  if (!(await isAdminAuthenticated())) {
+  if (!(await isAdminAuthenticated(req))) {
     return NextResponse.json({ error: "未授权" }, { status: 401 });
   }
   await ensureDb();

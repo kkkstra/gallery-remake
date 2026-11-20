@@ -19,9 +19,67 @@ function getBrandAccent(camera: string): { color: string; shape: "circle" | "squ
   const lower = camera.toLowerCase();
   if (lower.includes("leica")) return { color: "#E20613", shape: "circle" };
   if (lower.includes("hasselblad")) return { color: "#E07A16", shape: "square" };
-  if (lower.includes("fujifilm")) return { color: "#059669", shape: "bar" };
-  if (lower.includes("sony")) return { color: "#EA580C", shape: "bar" };
+  if (lower.includes("nikon") || /\bz\s?[56789f]\b/.test(lower)) return { color: "#EAB308", shape: "bar" };
+  if (lower.includes("lumix") || lower.includes("panasonic") || lower.startsWith("dc-")) return { color: "#DC2626", shape: "bar" };
+  if (lower.includes("canon") || lower.includes("eos")) return { color: "#DC2626", shape: "circle" };
+  if (lower.includes("fuji") || /^x-|^gfx/i.test(lower)) return { color: "#059669", shape: "bar" };
+  if (lower.includes("sony") || lower.startsWith("ilce")) return { color: "#EA580C", shape: "bar" };
   return { color: "#64748B", shape: "circle" };
+}
+
+function sampleImageSwatches(img: HTMLImageElement): string[] {
+  try {
+    const sample = document.createElement("canvas");
+    sample.width = 72;
+    sample.height = 72;
+    const sctx = sample.getContext("2d", { willReadFrequently: true });
+    if (!sctx) return [];
+    sctx.drawImage(img, 0, 0, 72, 72);
+    const data = sctx.getImageData(0, 0, 72, 72).data;
+
+    const buckets = new Map<string, { r: number; g: number; b: number; count: number }>();
+    for (let i = 0; i < data.length; i += 16) {
+      const r = data[i];
+      const g = data[i + 1];
+      const b = data[i + 2];
+      const key = `${r >> 5}-${g >> 5}-${b >> 5}`;
+      const prev = buckets.get(key);
+      if (prev) {
+        prev.r += r;
+        prev.g += g;
+        prev.b += b;
+        prev.count += 1;
+      } else {
+        buckets.set(key, { r, g, b, count: 1 });
+      }
+    }
+
+    const sorted = Array.from(buckets.values())
+      .map((b) => ({
+        r: Math.round(b.r / b.count),
+        g: Math.round(b.g / b.count),
+        b: Math.round(b.b / b.count),
+        count: b.count,
+      }))
+      .sort((a, b) => b.count - a.count);
+
+    const chosen: { r: number; g: number; b: number }[] = [];
+    for (const cand of sorted) {
+      if (chosen.every((c) => Math.hypot(c.r - cand.r, c.g - cand.g, c.b - cand.b) > 42)) {
+        chosen.push(cand);
+      }
+      if (chosen.length === 5) break;
+    }
+
+    return chosen
+      .sort((a, b) => 0.299 * a.r + 0.587 * a.g + 0.114 * a.b - (0.299 * b.r + 0.587 * b.g + 0.114 * b.b))
+      .map(
+        (c) =>
+          `#${[c.r, c.g, c.b].map((v) => Math.max(0, Math.min(255, v)).toString(16).padStart(2, "0")).join("")}`
+      );
+  } catch {
+    return [];
+  }
 }
 
 export function PrintCardModal({
@@ -34,9 +92,12 @@ export function PrintCardModal({
   const { locale, pick } = usePreferences();
   const [template, setTemplate] = useState<PrintTemplate>("classic");
   const [showPalette, setShowPalette] = useState(true);
+  const [autoSwatches, setAutoSwatches] = useState<string[]>([]);
   const [rendering, setRendering] = useState(true);
   const [downloaded, setDownloaded] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  const activeSwatches = swatches.length > 0 ? swatches : autoSwatches;
 
   const title = pick(photo.title, photo.titleEn);
   const place = pick(photo.location, photo.locationEn);
@@ -68,6 +129,12 @@ export function PrintCardModal({
       const canvas = canvasRef.current;
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
+
+      const palette =
+        swatches.length > 0 ? swatches : autoSwatches.length > 0 ? autoSwatches : sampleImageSwatches(img);
+      if (swatches.length === 0 && autoSwatches.length === 0 && palette.length > 0) {
+        setAutoSwatches(palette);
+      }
 
       const maxPhotoEdge = 1920;
       const scale = Math.min(1, maxPhotoEdge / Math.max(img.naturalWidth || 1600, img.naturalHeight || 1068));
@@ -136,14 +203,14 @@ export function PrintCardModal({
         ctx.font = `400 ${subSize}px ${fontSans}`;
         ctx.fillText(gearSpec, cw / 2, footerTop + footerH * 0.54);
 
-        if (showPalette && swatches.length > 0) {
+        if (showPalette && palette.length > 0) {
           const swW = Math.round(base * 0.024);
           const swH = Math.round(base * 0.0065);
           const gap = Math.round(base * 0.004);
-          const totalW = swatches.length * swW + (swatches.length - 1) * gap;
+          const totalW = palette.length * swW + (palette.length - 1) * gap;
           let sx = (cw - totalW) / 2;
           const sy = footerTop + footerH * 0.69;
-          swatches.forEach((hex) => {
+          palette.forEach((hex) => {
             ctx.fillStyle = hex;
             ctx.fillRect(sx, sy, swW, swH);
             sx += swW + gap;
@@ -170,12 +237,12 @@ export function PrintCardModal({
         ctx.fillText(metaLeft, leftX, centerY + subSize * 1.15);
 
         // Optional 5-color swatch bar aligned after or below left metadata
-        if (showPalette && swatches.length > 0) {
+        if (showPalette && palette.length > 0) {
           const swW = Math.round(base * 0.022);
           const swH = Math.round(base * 0.0055);
           const gap = Math.round(base * 0.003);
           const sy = centerY + subSize * 1.75;
-          swatches.forEach((hex, idx) => {
+          palette.forEach((hex, idx) => {
             ctx.fillStyle = hex;
             ctx.fillRect(leftX + idx * (swW + gap), sy, swW, swH);
           });
@@ -232,7 +299,7 @@ export function PrintCardModal({
     return () => {
       cancelled = true;
     };
-  }, [author, photo, place, showPalette, swatches, template, title]);
+  }, [author, autoSwatches, photo, place, showPalette, swatches, template, title]);
 
   const handleDownload = () => {
     const canvas = canvasRef.current;
@@ -292,7 +359,7 @@ export function PrintCardModal({
           ))}
         </div>
 
-        {swatches.length > 0 && (
+        {activeSwatches.length > 0 && (
           <>
             <span className="h-3.5 w-[1px] bg-white/15" />
             <button
