@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import type { Photo } from "@/lib/db/schema";
 import {
+  buildGroupMap,
   collapsePhotoListForDisplay,
   formatNumberedTitle,
   type DisplayPhotoCard,
@@ -95,7 +96,7 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
   const initialLens = searchParams.get("lens") || "all";
   const qView = searchParams.get("view");
   const initialView: "mosaic" | "index" | "sheet" =
-    qView === "mosaic" ? "mosaic" : qView === "sheet" ? "sheet" : "index";
+    qView === "index" ? "index" : qView === "sheet" ? "sheet" : "mosaic";
   const initialSort: "time" | "recommended" =
     searchParams.get("sort") === "recommended" ? "recommended" : "time";
 
@@ -108,7 +109,7 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
   );
   const [gearOpen, setGearOpen] = useState(initialCamera !== "all" || initialLens !== "all");
   const [view, setViewState] = useState<"mosaic" | "index" | "sheet">(initialView);
-  const [expandGroups, setExpandGroups] = useState(false);
+  const [expandGroups, setExpandGroups] = useState(true);
   const [lightboxIdx, setLightboxIdx] = useState<number | null>(null);
 
   // FLIP + Staggered Entrance animation refs
@@ -316,13 +317,14 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
     }
   }, [photos, router, searchParams]);
 
-  const hasCollapsibleGroups = useMemo(
-    () => collapsePhotoListForDisplay(filtered, { forceExpandAll: false }).cards.some((c) => c.isStackedCover),
-    [filtered]
-  );
+  const hasCollapsibleGroups = useMemo(() => buildGroupMap(filtered).size > 0, [filtered]);
 
   const { cards: displayCards, lightboxPhotos } = useMemo(
-    () => collapsePhotoListForDisplay(filtered, { forceExpandAll: expandGroups }),
+    () =>
+      collapsePhotoListForDisplay(
+        filtered,
+        expandGroups ? { forceExpandAll: true } : { alwaysStack: true }
+      ),
     [expandGroups, filtered]
   );
 
@@ -578,21 +580,8 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
                 />
               </button>
 
-              {/* Icon-Only View Switcher (Default: Index) */}
+              {/* Icon-Only View Switcher (Default: Mosaic) */}
               <div className="flex items-center rounded-md border border-[var(--border)] overflow-hidden">
-                <button
-                  type="button"
-                  onClick={() => changeView("index")}
-                  aria-label={locale === "en" ? "Index View" : "索引视图"}
-                  title={locale === "en" ? "Index View" : "索引视图"}
-                  className={`p-2 transition-colors duration-200 cursor-pointer ${
-                    view === "index"
-                      ? "bg-[var(--fg)] text-[var(--bg)]"
-                      : "bg-[var(--bg-elevated)] text-[var(--fg-muted)] hover:text-[var(--fg)]"
-                  }`}
-                >
-                  <LayoutGrid className="h-4 w-4" />
-                </button>
                 <button
                   type="button"
                   onClick={() => changeView("mosaic")}
@@ -605,6 +594,19 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
                   }`}
                 >
                   <Rows3 className="h-4 w-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => changeView("index")}
+                  aria-label={locale === "en" ? "Index View" : "索引视图"}
+                  title={locale === "en" ? "Index View" : "索引视图"}
+                  className={`p-2 transition-colors duration-200 cursor-pointer ${
+                    view === "index"
+                      ? "bg-[var(--fg)] text-[var(--bg)]"
+                      : "bg-[var(--bg-elevated)] text-[var(--fg-muted)] hover:text-[var(--fg)]"
+                  }`}
+                >
+                  <LayoutGrid className="h-4 w-4" />
                 </button>
                 <button
                   type="button"
