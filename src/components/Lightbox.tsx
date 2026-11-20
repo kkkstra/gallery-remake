@@ -809,17 +809,6 @@ export function Lightbox({
               <Frame className="h-[17px] w-[17px] sm:h-[18px] sm:w-[18px] stroke-[1.6]" />
             </button>
 
-            {/* Signature Print Export */}
-            <button
-              type="button"
-              onClick={() => setShowPrintModal(true)}
-              title={locale === "en" ? "Signature Frame (P)" : "签名框 (P)"}
-              aria-label="签名框"
-              className="p-1.5 sm:p-2 rounded-full hover:bg-[var(--bg-subtle)] hover:text-[var(--fg)] transition cursor-pointer"
-            >
-              <Download className="h-[17px] w-[17px] sm:h-[18px] sm:w-[18px] stroke-[1.6]" />
-            </button>
-
             {/* Slideshow Play/Pause */}
             {photos.length > 1 && (
               <button
@@ -1332,6 +1321,7 @@ export function Lightbox({
               <button
                 type="button"
                 onClick={() => setShowPrintModal(true)}
+                title={locale === "en" ? "Signature Frame (P)" : "签名框 (P)"}
                 className="inline-flex items-center gap-1.5 text-sm text-[var(--fg)] hover:opacity-75 transition cursor-pointer"
               >
                 <Download className="h-4 w-4" />
