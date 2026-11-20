@@ -315,9 +315,12 @@ export async function GET(req: Request) {
         },
       },
       "/api/admin/collections": {
-        get: { summary: "List all collections with photos and monograph blocksJson" },
+        get: {
+          summary:
+            "List all collections with photos (including per-collection customTitle/displayTitle), parsed monograph blocks, photoTitles map, and blocksJson",
+        },
         post: {
-          summary: "Create a new collection / monograph",
+          summary: "Create a new collection / monograph (supports structured blocks, photoTitles map, or blocksJson)",
           requestBody: {
             content: {
               "application/json": {
@@ -332,10 +335,27 @@ export async function GET(req: Request) {
                     coverUrl: { type: "string" },
                     description: { type: "string" },
                     descriptionEn: { type: "string" },
-                    photoIds: { type: "array", items: { type: "integer" } },
+                    photoIds: {
+                      type: "array",
+                      items: { type: "integer" },
+                      description: "Ordered photo IDs (optional when structured `blocks` array is provided)",
+                    },
+                    blocks: {
+                      type: "array",
+                      description:
+                        "Structured MonographBlock array: cover blocks ({ id?, kind: 'cover', style: 'full'|'split'|'minimal', imageUrl, eyebrow, eyebrowEn, title, titleEn, body, bodyEn }) and photo blocks ({ id?, kind: 'photo', photoId, customTitle?, customTitleEn?, sideNote?, sideNoteEn?, noteAlign?: 'right'|'left' }). Group 1/2/3 suffixes are omitted in collections.",
+                      items: { type: "object" },
+                    },
+                    photoTitles: {
+                      type: "object",
+                      additionalProperties: true,
+                      description:
+                        "Convenience map keyed by photoId to set/clear per-collection plate titles & side notes without rebuilding blocks, e.g. { '39': '探向海平线的木栈桥', '41': { customTitle: '救生圈框住的那片海', customTitleEn: 'Framed by the Lifebuoy', sideNote: '...' } }",
+                    },
                     blocksJson: {
                       type: "string",
-                      description: "JSON-serialized array of MonographBlock items",
+                      description:
+                        "Backward-compatible JSON-serialized MonographBlock[] string (alternative to passing structured `blocks`)",
                     },
                   },
                 },
@@ -346,8 +366,47 @@ export async function GET(req: Request) {
         put: { summary: "Reorder collections ({ orderedIds: number[] })" },
       },
       "/api/admin/collections/{id}": {
-        get: { summary: "Get collection details" },
-        patch: { summary: "Update collection metadata, photoIds, or monograph blocksJson" },
+        get: {
+          summary:
+            "Get collection details with parsed blocks, photoTitles map, and photos[].customTitle / displayTitle",
+        },
+        patch: {
+          summary:
+            "Partially update collection metadata, photoIds, structured blocks, photoTitles map (per-photo custom title overrides), or blocksJson",
+          requestBody: {
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    slug: { type: "string" },
+                    title: { type: "string" },
+                    titleEn: { type: "string" },
+                    period: { type: "string" },
+                    coverUrl: { type: "string" },
+                    description: { type: "string" },
+                    descriptionEn: { type: "string" },
+                    sortOrder: { type: "integer" },
+                    photoIds: { type: "array", items: { type: "integer" } },
+                    blocks: {
+                      type: "array",
+                      description:
+                        "Structured MonographBlock array (automatically syncs collection photoIds when photoIds is omitted)",
+                      items: { type: "object" },
+                    },
+                    photoTitles: {
+                      type: "object",
+                      additionalProperties: true,
+                      description:
+                        "Map keyed by photoId to set/update/clear custom plate titles in-place (pass empty string '' to revert to original photo title), e.g. { '39': '探向海平线的木栈桥', '41': { customTitle: '救生圈框住的那片海', customTitleEn: 'Framed by the Lifebuoy' } }",
+                    },
+                    blocksJson: { type: "string" },
+                  },
+                },
+              },
+            },
+          },
+        },
         delete: { summary: "Delete collection (preserves underlying photos)" },
       },
       "/api/admin/gear": {

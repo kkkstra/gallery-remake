@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Aperture, ArrowLeft, ArrowRight, Camera, Images, MapPin } from "lucide-react";
 import type { CollectionWithPhotos } from "@/lib/queries";
 import type { Photo } from "@/lib/db/schema";
-import { buildGroupMap, formatNumberedTitle } from "@/lib/photo-groups";
 import { parseMonographBlocks, type MonographCoverBlock, type MonographPhotoBlock } from "@/lib/monograph";
 import { SiteHeader } from "./SiteHeader";
 import { SiteFooter } from "./SiteFooter";
@@ -62,18 +61,36 @@ export function CollectionDetailClient({
 
   const blocks = useMemo(() => parseMonographBlocks(collection.blocksJson, collection), [collection]);
 
-  // Ordered photos matching the monograph sequence for Lightbox navigation
+  const photoBlockById = useMemo(() => {
+    const m = new Map<number, MonographPhotoBlock>();
+    for (const b of blocks) {
+      if (b.kind === "photo") m.set(b.photoId, b);
+    }
+    return m;
+  }, [blocks]);
+
+  // Ordered photos matching the monograph sequence for Lightbox navigation (using collection custom titles & no group 1/2/3 suffix)
   const orderedPhotos = useMemo(() => {
     const map = new Map(collection.photos.map((p) => [p.id, p]));
-    const list: Photo[] = [];
+    const rawList: Photo[] = [];
     for (const b of blocks) {
       if (b.kind === "photo") {
         const found = map.get(b.photoId);
-        if (found) list.push(found);
+        if (found) rawList.push(found);
       }
     }
-    return list.length > 0 ? list : collection.photos;
-  }, [blocks, collection.photos]);
+    const seq = rawList.length > 0 ? rawList : collection.photos;
+    return seq.map((p) => {
+      const b = photoBlockById.get(p.id);
+      return {
+        ...p,
+        title: b?.customTitle?.trim() || p.title,
+        titleEn: b?.customTitleEn?.trim() || p.titleEn,
+        groupId: "",
+        groupOrder: 0,
+      };
+    });
+  }, [blocks, collection.photos, photoBlockById]);
 
   // Build render segments: Cover Pages (can be multiple!) + Annotated Side-Note Plates + Single/Paired Pure Plates
   const segments = useMemo<RenderSegment[]>(() => {
@@ -160,11 +177,15 @@ export function CollectionDetailClient({
     };
   }, [segments.length]);
 
-  const groupMap = useMemo(() => buildGroupMap(orderedPhotos), [orderedPhotos]);
-  const photoTitle = (p: Photo) => {
-    const info = groupMap.get(p.id);
-    return pick(formatNumberedTitle(p.title, info), formatNumberedTitle(p.titleEn, info));
-  };
+  const photoTitle = useCallback(
+    (p: Photo) => {
+      const b = photoBlockById.get(p.id);
+      const zh = b?.customTitle?.trim() || p.title;
+      const en = b?.customTitleEn?.trim() || p.titleEn;
+      return pick(zh, en);
+    },
+    [photoBlockById, pick]
+  );
 
   const PlateCaption = ({ photo }: { photo: Photo }) => {
     const pTitle = photoTitle(photo);
@@ -395,7 +416,7 @@ export function CollectionDetailClient({
                     <GalleryImage
                       photoId={photo.id}
                       src={photo.url}
-                      alt={pick(photo.title, photo.titleEn)}
+                      alt={photoTitle(photo)}
                       ambient={photo.ambient}
                       blurData={photo.blurData}
                       aspectRatio={`${dim.w} / ${dim.h}`}
@@ -451,7 +472,7 @@ export function CollectionDetailClient({
                     <GalleryImage
                       photoId={photo.id}
                       src={photo.url}
-                      alt={pick(photo.title, photo.titleEn)}
+                      alt={photoTitle(photo)}
                       ambient={photo.ambient}
                       blurData={photo.blurData}
                       aspectRatio={`${dim.w} / ${dim.h}`}
@@ -484,7 +505,7 @@ export function CollectionDetailClient({
                   <GalleryImage
                     photoId={left.photo.id}
                     src={left.photo.url}
-                    alt={pick(left.photo.title, left.photo.titleEn)}
+                    alt={photoTitle(left.photo)}
                     ambient={left.photo.ambient}
                     blurData={left.photo.blurData}
                     aspectRatio={`${leftDim.w} / ${leftDim.h}`}
@@ -504,7 +525,7 @@ export function CollectionDetailClient({
                   <GalleryImage
                     photoId={right.photo.id}
                     src={right.photo.url}
-                    alt={pick(right.photo.title, right.photo.titleEn)}
+                    alt={photoTitle(right.photo)}
                     ambient={right.photo.ambient}
                     blurData={right.photo.blurData}
                     aspectRatio={`${rightDim.w} / ${rightDim.h}`}

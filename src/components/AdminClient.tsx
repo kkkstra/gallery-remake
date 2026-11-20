@@ -3465,7 +3465,18 @@ export function AdminClient({
                                   </button>
                                 </div>
                                 <div className="min-w-0">
-                                  <div className="truncate font-medium text-[var(--fg)]">{p.title}</div>
+                                  <div className="truncate font-medium text-[var(--fg)]">
+                                    {block.customTitle?.trim() ? (
+                                      <>
+                                        {block.customTitle.trim()}
+                                        <span className="ml-1.5 font-normal text-[11px] text-[var(--fg-muted)]">
+                                          （原：{p.title}）
+                                        </span>
+                                      </>
+                                    ) : (
+                                      p.title
+                                    )}
+                                  </div>
                                   <div className="text-[11px] text-[var(--fg-muted)]">{p.location}</div>
                                 </div>
                               </div>
@@ -3518,6 +3529,25 @@ export function AdminClient({
                                   <Trash2 className="h-3.5 w-3.5" />
                                 </button>
                               </div>
+                            </div>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                              <input
+                                placeholder={`影集内自定义标题 (留空默认「${p.title}」，不带组图序号)`}
+                                value={block.customTitle || ""}
+                                onChange={(e) => updateBlockAt(bIdx, { customTitle: e.target.value })}
+                                className={INPUT_CLS}
+                              />
+                              <input
+                                placeholder={
+                                  p.titleEn
+                                    ? `Custom Plate Title (EN, default: ${p.titleEn})`
+                                    : "Custom Plate Title (EN, 可选)"
+                                }
+                                value={block.customTitleEn || ""}
+                                onChange={(e) => updateBlockAt(bIdx, { customTitleEn: e.target.value })}
+                                className={INPUT_CLS}
+                              />
                             </div>
 
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -3875,7 +3905,7 @@ export function AdminClient({
                 </div>
                 <div># 3. 上传原图 / 合并组图 / 服务端裁剪网站图标与头像 / 器材与站点配置：</div>
                 <div>
-                  POST /api/admin/upload · PATCH /api/admin/photos (group_merge/reorder) · POST /api/admin/asset (target=favicon|avatar, apply=true) · /api/admin/collections · /api/admin/gear · /api/admin/settings
+                  POST /api/admin/upload · PATCH /api/admin/photos (group_merge/reorder) · PATCH /api/admin/collections/:id (photoTitles/blocks) · POST /api/admin/asset (target=favicon|avatar, apply=true) · /api/admin/gear · /api/admin/settings
                 </div>
               </div>
             </section>
