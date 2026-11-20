@@ -1,5 +1,6 @@
 import path from "node:path";
 import { NextResponse } from "next/server";
+import sharp from "sharp";
 import { isAdminAuthenticated } from "@/lib/auth";
 import { db, ensureDb } from "@/lib/db";
 import { collectionPhotos, photos } from "@/lib/db/schema";
@@ -23,11 +24,15 @@ export async function POST(req: Request) {
   const arrayBuffer = await file.arrayBuffer();
   const buffer = Buffer.from(arrayBuffer);
 
-  const [url, blurData] = await Promise.all([
+  const [url, blurData, sharpMeta] = await Promise.all([
     storeUploadedFile(buffer, file.name, file.type),
     generateBlurDataUrl(buffer),
+    sharp(buffer).metadata().catch(() => null),
   ]);
   const exif = extractExifFromBuffer(buffer);
+  const sharpSwap = Number(sharpMeta?.orientation || 1) >= 5 && Number(sharpMeta?.orientation || 1) <= 8;
+  const sharpWidth = sharpSwap ? sharpMeta?.height : sharpMeta?.width;
+  const sharpHeight = sharpSwap ? sharpMeta?.width : sharpMeta?.height;
 
   const clientWidth = Number(form.get("width") || 0) || undefined;
   const clientHeight = Number(form.get("height") || 0) || undefined;
@@ -61,8 +66,8 @@ export async function POST(req: Request) {
       description,
       descriptionEn,
       url,
-      width: exif.width || clientWidth || 1600,
-      height: exif.height || clientHeight || 1068,
+      width: sharpWidth || exif.width || clientWidth || 1600,
+      height: sharpHeight || exif.height || clientHeight || 1068,
       ambient,
       blurData,
       category,

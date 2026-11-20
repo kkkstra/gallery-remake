@@ -146,11 +146,12 @@ export function PhotoDetailClient({
                 <div className="flex items-center gap-2.5 overflow-x-auto no-scrollbar pb-0.5">
                   {groupInfo.siblings.map((sib, sIdx) => {
                     const isCurr = sib.id === photo.id;
+                    const sibPortrait = (sib.height || 1068) > (sib.width || 1600);
                     return (
                       <ViewLink
                         key={sib.id}
                         href={`/photo/${sib.id}`}
-                        className={`group/sib relative h-16 w-24 shrink-0 overflow-hidden rounded-xs transition ${
+                        className={`group/sib relative h-16 ${sibPortrait ? "w-11" : "w-24"} shrink-0 overflow-hidden rounded-xs transition ${
                           isCurr
                             ? "ring-2 ring-[var(--fg)] opacity-100"
                             : "opacity-60 hover:opacity-100 ring-1 ring-[var(--border)]"
@@ -161,6 +162,15 @@ export function PhotoDetailClient({
                           loading="lazy"
                           decoding="async"
                           alt=""
+                          onLoad={(e) => {
+                            const el = e.currentTarget;
+                            const parent = el.parentElement;
+                            if (!parent || !el.naturalWidth || !el.naturalHeight) return;
+                            if (el.naturalHeight > el.naturalWidth) {
+                              parent.classList.remove("w-24");
+                              parent.classList.add("w-11");
+                            }
+                          }}
                           className="h-full w-full object-cover"
                         />
                         <span className="absolute left-1.5 bottom-1 rounded bg-black/65 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">

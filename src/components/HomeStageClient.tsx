@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowRight, ChevronLeft, ChevronRight, Images, Layers, MapPin } from "lucide-react";
 import type { Photo } from "@/lib/db/schema";
 import type { CollectionWithPhotos } from "@/lib/queries";
@@ -28,22 +28,29 @@ interface HomeStageClientProps {
 
 const HOME_ROW_TARGET = 4.3;
 
-function buildHomePreviewRows(cards: DisplayPhotoCard[]): DisplayPhotoCard[][] {
-  const rows: DisplayPhotoCard[][] = [];
+function buildHomePreviewRows(
+  cards: DisplayPhotoCard[],
+  getDim: (p: Photo) => { w: number; h: number }
+): { items: DisplayPhotoCard[]; sum: number; isLast: boolean }[] {
+  const rows: { items: DisplayPhotoCard[]; sum: number; isLast: boolean }[] = [];
   let curr: DisplayPhotoCard[] = [];
   let sum = 0;
   for (const card of cards) {
-    const p = card.photo;
-    const ratio = Math.max(0.55, Math.min(2.4, (p.width || 1600) / (p.height || 1068)));
+    const d = getDim(card.photo);
+    const ratio = Math.max(0.45, Math.min(2.6, d.w / d.h));
     curr.push(card);
     sum += ratio;
     if (sum >= HOME_ROW_TARGET || curr.length >= 4) {
-      rows.push(curr);
+      rows.push({ items: curr, sum, isLast: false });
       curr = [];
       sum = 0;
     }
   }
-  if (curr.length > 0) rows.push(curr);
+  if (curr.length > 0) {
+    rows.push({ items: curr, sum, isLast: true });
+  } else if (rows.length > 0) {
+    rows[rows.length - 1].isLast = true;
+  }
   return rows;
 }
 
@@ -119,7 +126,29 @@ export function HomeStageClient({
     return () => window.removeEventListener("keydown", onKey);
   }, [lightboxIdx, slides.length]);
 
-  const previewRows = useMemo(() => buildHomePreviewRows(galleryCards), [galleryCards]);
+  const [naturalSizes, setNaturalSizes] = useState<Record<number, { w: number; h: number }>>({});
+  const photoById = useMemo(() => new Map(allPhotos.map((p) => [p.id, p])), [allPhotos]);
+  const handleNaturalSize = useCallback(
+    (id: number, nw: number, nh: number) => {
+      const p = photoById.get(id);
+      if (!p || !nw || !nh) return;
+      const dbR = (p.width || 1600) / (p.height || 1068);
+      if (Math.abs(nw / nh - dbR) / dbR <= 0.04) return;
+      setNaturalSizes((prev) =>
+        prev[id]?.w === nw && prev[id]?.h === nh ? prev : { ...prev, [id]: { w: nw, h: nh } }
+      );
+    },
+    [photoById]
+  );
+  const effDim = useCallback(
+    (p: Photo) => naturalSizes[p.id] ?? { w: p.width || 1600, h: p.height || 1068 },
+    [naturalSizes]
+  );
+
+  const previewRows = useMemo(
+    () => buildHomePreviewRows(galleryCards, effDim),
+    [effDim, galleryCards]
+  );
   const slideGroupMap = useMemo(() => buildGroupMap(slides), [slides]);
 
   const openFromList = (target: Photo, list: Photo[], explicitIdx?: number) => {
@@ -378,58 +407,73 @@ export function HomeStageClient({
           </Reveal>
 
           <div className="space-y-2">
-            {previewRows.map((row, rIdx) => (
-              <Reveal key={rIdx} delayMs={rIdx * 80}>
-                <div className="flex flex-col sm:flex-row gap-2">
-                  {row.map((card) => {
-                    const { photo: item, flatIdx, isStackedCover, groupTotal, groupIndex } = card;
-                    const ratio = Math.max(0.5, Math.min(2.5, (item.width || 1600) / (item.height || 1068)));
-                    const iTitle =
-                      isStackedCover || groupTotal <= 1
-                        ? pick(item.title, item.titleEn)
-                        : pick(
-                            formatNumberedTitle(item.title, { index: groupIndex, total: groupTotal }),
-                            formatNumberedTitle(item.titleEn, { index: groupIndex, total: groupTotal })
-                          );
-                    const iPlace = pick(item.location, item.locationEn);
-                    return (
-                      <figure
-                        key={item.id}
-                        onClick={() => openFromList(item, galleryLightboxPhotos, flatIdx)}
-                        style={{ "--item-grow": ratio } as React.CSSProperties}
-                        className="group relative cursor-pointer hover:z-20 sm:[flex-basis:0%] sm:[flex-grow:var(--item-grow)]"
-                      >
-                        <GalleryImage
-                          photoId={item.id}
-                          src={item.url}
-                          alt={iTitle}
-                          ambient={item.ambient}
-                          blurData={item.blurData}
-                          aspectRatio={`${item.width || 1600} / ${item.height || 1068}`}
-                          groupBadge={
-                            groupTotal > 1
-                              ? isStackedCover
-                                ? groupTotal
-                                : `${groupIndex}/${groupTotal}`
-                              : undefined
-                          }
-                          className="w-full h-full"
-                        />
-                        <figcaption className="glass-strip pointer-events-none absolute inset-x-0 bottom-0 flex items-center justify-between px-3.5 py-2.5 text-sm text-zinc-100 opacity-0 translate-y-1 transition-all duration-300 group-hover:opacity-100 group-hover:translate-y-0">
-                          <span className="truncate font-medium">{iTitle}</span>
-                          {iPlace && (
-                            <span className="inline-flex items-center gap-1 text-xs text-zinc-200 shrink-0 ml-2">
-                              <MapPin className="h-3 w-3" />
-                              {iPlace.split(",")[0]}
-                            </span>
-                          )}
-                        </figcaption>
-                      </figure>
-                    );
-                  })}
-                </div>
-              </Reveal>
-            ))}
+            {previewRows.map((row, rIdx) => {
+              const spacerGrow =
+                row.isLast && row.sum < HOME_ROW_TARGET * 0.88
+                  ? Math.max(0, HOME_ROW_TARGET - row.sum)
+                  : 0;
+              return (
+                <Reveal key={rIdx} delayMs={rIdx * 80}>
+                  <div className="flex flex-col sm:flex-row gap-2">
+                    {row.items.map((card) => {
+                      const { photo: item, flatIdx, isStackedCover, groupTotal, groupIndex } = card;
+                      const dim = effDim(item);
+                      const ratio = Math.max(0.45, Math.min(2.6, dim.w / dim.h));
+                      const iTitle =
+                        isStackedCover || groupTotal <= 1
+                          ? pick(item.title, item.titleEn)
+                          : pick(
+                              formatNumberedTitle(item.title, { index: groupIndex, total: groupTotal }),
+                              formatNumberedTitle(item.titleEn, { index: groupIndex, total: groupTotal })
+                            );
+                      const iPlace = pick(item.location, item.locationEn);
+                      return (
+                        <figure
+                          key={item.id}
+                          onClick={() => openFromList(item, galleryLightboxPhotos, flatIdx)}
+                          style={{ "--item-grow": ratio } as React.CSSProperties}
+                          className="group relative cursor-pointer hover:z-20 sm:[flex-basis:0%] sm:[flex-grow:var(--item-grow)]"
+                        >
+                          <GalleryImage
+                            photoId={item.id}
+                            src={item.url}
+                            alt={iTitle}
+                            ambient={item.ambient}
+                            blurData={item.blurData}
+                            aspectRatio={String(ratio)}
+                            onNaturalSize={handleNaturalSize}
+                            groupBadge={
+                              groupTotal > 1
+                                ? isStackedCover
+                                  ? groupTotal
+                                  : `${groupIndex}/${groupTotal}`
+                                : undefined
+                            }
+                            className="w-full h-full"
+                          />
+                          <figcaption className="glass-strip pointer-events-none absolute inset-x-0 bottom-0 flex items-center justify-between px-3.5 py-2.5 text-sm text-zinc-100 opacity-0 translate-y-1 transition-all duration-300 group-hover:opacity-100 group-hover:translate-y-0">
+                            <span className="truncate font-medium">{iTitle}</span>
+                            {iPlace && (
+                              <span className="inline-flex items-center gap-1 text-xs text-zinc-200 shrink-0 ml-2">
+                                <MapPin className="h-3 w-3" />
+                                {iPlace.split(",")[0]}
+                              </span>
+                            )}
+                          </figcaption>
+                        </figure>
+                      );
+                    })}
+                    {spacerGrow > 0 && (
+                      <div
+                        aria-hidden="true"
+                        style={{ flexGrow: spacerGrow, flexBasis: "0%" }}
+                        className="hidden sm:block pointer-events-none"
+                      />
+                    )}
+                  </div>
+                </Reveal>
+              );
+            })}
           </div>
         </section>
       )}

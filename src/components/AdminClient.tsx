@@ -173,6 +173,7 @@ export function AdminClient({
   const [expandedGroupIds, setExpandedGroupIds] = useState<string[]>([]);
   const [dragOverPhotoId, setDragOverPhotoId] = useState<number | null>(null);
   const dragInspFrameIdxRef = useRef<number | null>(null);
+  const healedDimIdsRef = useRef<Set<number>>(new Set());
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [uploadDrawerOpen, setUploadDrawerOpen] = useState(initialPhotos.length === 0);
   const [uploadSubTab, setUploadSubTab] = useState<"file" | "url">("file");
@@ -661,14 +662,54 @@ export function AdminClient({
     }
   };
 
+  const healPhotoDimensionsIfSwapped = (photo: Photo, el: HTMLImageElement) => {
+    const nw = el.naturalWidth;
+    const nh = el.naturalHeight;
+    if (!nw || !nh || healedDimIdsRef.current.has(photo.id)) return;
+    const orientSwapped = (nw > nh) !== ((photo.width || 1600) > (photo.height || 1068));
+    if (!orientSwapped) return;
+    healedDimIdsRef.current.add(photo.id);
+    const isDefaultPlaceholder = photo.width === 1600 && photo.height === 1068;
+    const trueW = isDefaultPlaceholder ? nw : photo.height;
+    const trueH = isDefaultPlaceholder ? nh : photo.width;
+    setPhotoList((prev) =>
+      prev.map((p) => (p.id === photo.id ? { ...p, width: trueW, height: trueH } : p))
+    );
+    if (editingPhoto?.id === photo.id) {
+      setEditingPhoto((prev) => (prev && prev.id === photo.id ? { ...prev, width: trueW, height: trueH } : prev));
+    }
+    fetch(`/api/admin/photos/${photo.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ width: trueW, height: trueH }),
+    }).catch(() => {});
+  };
+
   const handleAddExternal = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!extPhoto.url || !extPhoto.title) return;
+    const probed = await new Promise<{ width?: number; height?: number }>((resolve) => {
+      const img = new Image();
+      const timer = setTimeout(() => resolve({}), 2500);
+      img.onload = () => {
+        clearTimeout(timer);
+        resolve({
+          width: img.naturalWidth || undefined,
+          height: img.naturalHeight || undefined,
+        });
+      };
+      img.onerror = () => {
+        clearTimeout(timer);
+        resolve({});
+      };
+      img.src = extPhoto.url;
+    });
     const res = await fetch("/api/admin/photos", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         ...extPhoto,
+        ...probed,
         hidden: batchHidden,
         collectionIds: Number(batchColId) > 0 ? [Number(batchColId)] : [],
       }),
@@ -1953,7 +1994,10 @@ export function AdminClient({
                             decoding="async"
                             draggable={false}
                             alt={photo.title}
-                            className={`h-full w-full object-cover select-none transition-transform duration-300 group-hover:scale-[1.03] ${
+                            onLoad={(e) => healPhotoDimensionsIfSwapped(photo, e.currentTarget)}
+                            className={`h-full w-full ${
+                              (photo.height || 1068) > (photo.width || 1600) ? "object-contain" : "object-cover"
+                            } select-none transition-transform duration-300 group-hover:scale-[1.03] ${
                               photo.hidden ? "opacity-45 grayscale-[35%]" : ""
                             }`}
                           />
@@ -2157,7 +2201,10 @@ export function AdminClient({
                             decoding="async"
                             draggable={false}
                             alt=""
-                            className={`h-11 w-16 shrink-0 rounded-xs object-cover select-none ${
+                            onLoad={(e) => healPhotoDimensionsIfSwapped(photo, e.currentTarget)}
+                            className={`h-11 w-16 shrink-0 rounded-xs ${
+                              (photo.height || 1068) > (photo.width || 1600) ? "object-contain bg-[var(--bg-subtle)]" : "object-cover"
+                            } select-none ${
                               photo.hidden ? "opacity-45 grayscale" : ""
                             }`}
                           />
@@ -2341,7 +2388,7 @@ export function AdminClient({
                       src={optImg(editingPhoto.url, 256, 75)}
                       decoding="async"
                       alt=""
-                      className={`h-16 w-24 shrink-0 rounded-md object-cover ring-1 ring-[var(--border)] ${
+                      className={`h-16 w-24 shrink-0 rounded-md bg-[var(--bg-subtle)] object-contain ring-1 ring-[var(--border)] ${
                         editingPhoto.hidden ? "opacity-50 grayscale" : ""
                       }`}
                     />
@@ -2437,6 +2484,7 @@ export function AdminClient({
                         <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
                           {inspGroup.siblings.map((sib, sIdx) => {
                             const active = sib.id === editingPhoto.id;
+                            const sibPortrait = (sib.height || 1068) > (sib.width || 1600);
                             return (
                               <button
                                 key={sib.id}
@@ -2460,7 +2508,7 @@ export function AdminClient({
                                 }}
                                 onClick={() => selectInspectorPhoto(sib)}
                                 title="点击切换本帧 · 直接拖拽缩略图可调整组内顺序"
-                                className={`relative h-11 w-16 shrink-0 overflow-hidden rounded-xs transition cursor-grab active:cursor-grabbing ${
+                                className={`relative h-12 ${sibPortrait ? "w-8" : "w-16"} shrink-0 overflow-hidden rounded-xs transition cursor-grab active:cursor-grabbing ${
                                   active
                                     ? "ring-2 ring-[var(--fg)] opacity-100"
                                     : "opacity-55 hover:opacity-95 ring-1 ring-[var(--border)]"
@@ -2472,6 +2520,7 @@ export function AdminClient({
                                   decoding="async"
                                   draggable={false}
                                   alt=""
+                                  onLoad={(e) => healPhotoDimensionsIfSwapped(sib, e.currentTarget)}
                                   className="h-full w-full object-cover select-none"
                                 />
                                 <span className="absolute left-1 bottom-0.5 rounded bg-black/70 px-1 text-[10px] font-semibold leading-tight text-white">
@@ -4298,7 +4347,7 @@ export function AdminClient({
                           loading="lazy"
                           decoding="async"
                           alt=""
-                          className="h-full w-full object-cover"
+                          className="h-full w-full object-contain"
                         />
                         <span className="absolute left-1.5 top-1.5 rounded bg-black/75 px-1.5 py-0.5 text-[10px] font-semibold text-white">
                           #{idx + 1}

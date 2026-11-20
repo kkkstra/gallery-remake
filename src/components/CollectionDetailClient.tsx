@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Aperture, ArrowLeft, ArrowRight, Camera, Images, MapPin } from "lucide-react";
 import type { CollectionWithPhotos } from "@/lib/queries";
 import type { Photo } from "@/lib/db/schema";
@@ -37,6 +37,28 @@ export function CollectionDetailClient({
   const { locale, copyrightGuard, pick } = usePreferences();
   const [lightboxIdx, setLightboxIdx] = useState<number | null>(null);
   const spreadsContainerRef = useRef<HTMLDivElement>(null);
+  const [naturalSizes, setNaturalSizes] = useState<Record<number, { w: number; h: number }>>({});
+
+  const photoById = useMemo(
+    () => new Map(collection.photos.map((p) => [p.id, p])),
+    [collection.photos]
+  );
+  const handleNaturalSize = useCallback(
+    (id: number, nw: number, nh: number) => {
+      const p = photoById.get(id);
+      if (!p || !nw || !nh) return;
+      const dbR = (p.width || 1600) / (p.height || 1068);
+      if (Math.abs(nw / nh - dbR) / dbR <= 0.04) return;
+      setNaturalSizes((prev) =>
+        prev[id]?.w === nw && prev[id]?.h === nh ? prev : { ...prev, [id]: { w: nw, h: nh } }
+      );
+    },
+    [photoById]
+  );
+  const effDim = useCallback(
+    (p: Photo) => naturalSizes[p.id] ?? { w: p.width || 1600, h: p.height || 1068 },
+    [naturalSizes]
+  );
 
   const blocks = useMemo(() => parseMonographBlocks(collection.blocksJson, collection), [collection]);
 
@@ -352,7 +374,8 @@ export function CollectionDetailClient({
             const { photo, block, lightboxIndex } = seg;
             const noteText = pick(block.sideNote, block.sideNoteEn);
             const noteLeft = block.noteAlign === "left";
-            const isPortrait = (photo.height || 1068) > (photo.width || 1600);
+            const dim = effDim(photo);
+            const isPortrait = dim.h > dim.w;
 
             return (
               <Reveal key={block.id}>
@@ -375,7 +398,8 @@ export function CollectionDetailClient({
                       alt={pick(photo.title, photo.titleEn)}
                       ambient={photo.ambient}
                       blurData={photo.blurData}
-                      aspectRatio={`${photo.width || 1600} / ${photo.height || 1068}`}
+                      aspectRatio={`${dim.w} / ${dim.h}`}
+                      onNaturalSize={handleNaturalSize}
                       className="w-full"
                     />
                     <PlateCaption photo={photo} />
@@ -409,7 +433,8 @@ export function CollectionDetailClient({
 
           if (seg.type === "single") {
             const { photo, lightboxIndex, alignRight } = seg;
-            const isPortrait = (photo.height || 1068) > (photo.width || 1600);
+            const dim = effDim(photo);
+            const isPortrait = dim.h > dim.w;
             return (
               <Reveal key={`single-${photo.id}`}>
                 <div className="mx-auto max-w-[1320px] px-4 sm:px-9">
@@ -429,7 +454,8 @@ export function CollectionDetailClient({
                       alt={pick(photo.title, photo.titleEn)}
                       ambient={photo.ambient}
                       blurData={photo.blurData}
-                      aspectRatio={`${photo.width || 1600} / ${photo.height || 1068}`}
+                      aspectRatio={`${dim.w} / ${dim.h}`}
+                      onNaturalSize={handleNaturalSize}
                       className="w-full"
                     />
                     <PlateCaption photo={photo} />
@@ -440,8 +466,10 @@ export function CollectionDetailClient({
           }
 
           const { left, right } = seg;
-          const leftPortrait = (left.photo.height || 1068) > (left.photo.width || 1600);
-          const rightPortrait = (right.photo.height || 1068) > (right.photo.width || 1600);
+          const leftDim = effDim(left.photo);
+          const rightDim = effDim(right.photo);
+          const leftPortrait = leftDim.h > leftDim.w;
+          const rightPortrait = rightDim.h > rightDim.w;
 
           return (
             <Reveal key={`pair-${left.photo.id}-${right.photo.id}`}>
@@ -459,7 +487,8 @@ export function CollectionDetailClient({
                     alt={pick(left.photo.title, left.photo.titleEn)}
                     ambient={left.photo.ambient}
                     blurData={left.photo.blurData}
-                    aspectRatio={`${left.photo.width || 1600} / ${left.photo.height || 1068}`}
+                    aspectRatio={`${leftDim.w} / ${leftDim.h}`}
+                    onNaturalSize={handleNaturalSize}
                     className="w-full"
                   />
                   <PlateCaption photo={left.photo} />
@@ -478,7 +507,8 @@ export function CollectionDetailClient({
                     alt={pick(right.photo.title, right.photo.titleEn)}
                     ambient={right.photo.ambient}
                     blurData={right.photo.blurData}
-                    aspectRatio={`${right.photo.width || 1600} / ${right.photo.height || 1068}`}
+                    aspectRatio={`${rightDim.w} / ${rightDim.h}`}
+                    onNaturalSize={handleNaturalSize}
                     className="w-full"
                   />
                   <PlateCaption photo={right.photo} />

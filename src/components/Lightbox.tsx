@@ -141,6 +141,7 @@ export function Lightbox({
   const [matted, setMatted] = useState(false);
   const [loupeMode, setLoupeMode] = useState(false);
   const [shiftHeld, setShiftHeld] = useState(false);
+  const [realImgDim, setRealImgDim] = useState<{ id: number; w: number; h: number } | null>(null);
   const [loupePos, setLoupePos] = useState<{
     stageX: number;
     stageY: number;
@@ -951,9 +952,13 @@ export function Lightbox({
               decoding="async"
               alt={title}
               draggable={false}
-              onLoad={() => {
+              onLoad={(e) => {
                 lastLoadedUrlRef.current = optImg(photo.url, 2048, 85);
                 setPrevPhotoUrl(null);
+                const el = e.currentTarget;
+                if (el.naturalWidth && el.naturalHeight) {
+                  setRealImgDim({ id: photo.id, w: el.naturalWidth, h: el.naturalHeight });
+                }
               }}
               onPointerDown={handlePointerDown}
               onPointerMove={handlePointerMove}
@@ -1164,6 +1169,7 @@ export function Lightbox({
                     {groupInfo.siblings.map((sib, sIdx) => {
                       const targetIdx = photoIndexById.get(sib.id);
                       const isCurr = sib.id === photo.id;
+                      const sibPortrait = (sib.height || 1068) > (sib.width || 1600);
                       return (
                         <button
                           key={sib.id}
@@ -1171,7 +1177,7 @@ export function Lightbox({
                           onClick={() => {
                             if (targetIdx !== undefined) onChangeIndex(targetIdx);
                           }}
-                          className={`relative h-11 w-15 shrink-0 overflow-hidden rounded-xs transition cursor-pointer ${
+                          className={`relative h-12 ${sibPortrait ? "w-8" : "w-16"} shrink-0 overflow-hidden rounded-xs transition cursor-pointer ${
                             isCurr
                               ? "ring-2 ring-[var(--fg)] opacity-100"
                               : "opacity-55 hover:opacity-95 ring-1 ring-[var(--border)]"
@@ -1182,6 +1188,15 @@ export function Lightbox({
                             loading="lazy"
                             decoding="async"
                             alt=""
+                            onLoad={(e) => {
+                              const el = e.currentTarget;
+                              const parent = el.parentElement;
+                              if (!parent || !el.naturalWidth || !el.naturalHeight) return;
+                              if (el.naturalHeight > el.naturalWidth) {
+                                parent.classList.remove("w-16");
+                                parent.classList.add("w-8");
+                              }
+                            }}
                             className="h-full w-full object-cover"
                           />
                           <span className="absolute left-1 bottom-0.5 rounded bg-black/65 px-1 text-[10px] font-semibold leading-tight text-white">
@@ -1368,7 +1383,14 @@ export function Lightbox({
                     {locale === "en" ? "Size" : "画幅"}
                   </dt>
                   <dd className="text-right text-[var(--fg-muted)]">
-                    {photo.width} × {photo.height} ({formatRatio(photo.width, photo.height)})
+                    {(() => {
+                      const swap =
+                        realImgDim?.id === photo.id &&
+                        (realImgDim.w > realImgDim.h) !== (photo.width > photo.height);
+                      const w = swap ? photo.height : photo.width;
+                      const h = swap ? photo.width : photo.height;
+                      return `${w} × ${h} (${formatRatio(w, h)})`;
+                    })()}
                   </dd>
                 </div>
               </dl>

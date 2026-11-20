@@ -164,8 +164,11 @@ export function AdminHomepageTab({
                   src={optImg(p.url, 384, 75)}
                   loading="lazy"
                   decoding="async"
+                  draggable={false}
                   alt={label}
-                  className="h-full w-full object-cover"
+                  className={`h-full w-full select-none ${
+                    (p.height || 1068) > (p.width || 1600) ? "object-contain" : "object-cover"
+                  }`}
                 />
                 <span className="absolute left-1.5 top-1.5 rounded bg-black/70 px-1.5 py-0.5 text-[10px] font-semibold text-white">
                   #{idx + 1}

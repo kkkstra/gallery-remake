@@ -59,6 +59,7 @@ const TARGET_ROW_RATIO = 4.3;
 
 function buildJustifiedRows(
   list: DisplayPhotoCard[],
+  getDim: (p: Photo) => { w: number; h: number },
   targetRatioSum = TARGET_ROW_RATIO,
   maxItems = 4
 ): { items: DisplayPhotoCard[]; sum: number; isLast: boolean }[] {
@@ -67,8 +68,8 @@ function buildJustifiedRows(
   let sum = 0;
 
   list.forEach((card) => {
-    const p = card.photo;
-    const ratio = Math.max(0.55, Math.min(2.4, (p.width || 1600) / (p.height || 1068)));
+    const d = getDim(card.photo);
+    const ratio = Math.max(0.45, Math.min(2.6, d.w / d.h));
     current.push(card);
     sum += ratio;
     if (sum >= targetRatioSum || current.length >= maxItems) {
@@ -111,6 +112,25 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
   const [view, setViewState] = useState<"mosaic" | "index" | "sheet">(initialView);
   const [expandGroups, setExpandGroups] = useState(true);
   const [lightboxIdx, setLightboxIdx] = useState<number | null>(null);
+  const [naturalSizes, setNaturalSizes] = useState<Record<number, { w: number; h: number }>>({});
+
+  const photoById = useMemo(() => new Map(photos.map((p) => [p.id, p])), [photos]);
+  const handleNaturalSize = useCallback(
+    (id: number, nw: number, nh: number) => {
+      const p = photoById.get(id);
+      if (!p || !nw || !nh) return;
+      const dbR = (p.width || 1600) / (p.height || 1068);
+      if (Math.abs(nw / nh - dbR) / dbR <= 0.04) return;
+      setNaturalSizes((prev) =>
+        prev[id]?.w === nw && prev[id]?.h === nh ? prev : { ...prev, [id]: { w: nw, h: nh } }
+      );
+    },
+    [photoById]
+  );
+  const effDim = useCallback(
+    (p: Photo) => naturalSizes[p.id] ?? { w: p.width || 1600, h: p.height || 1068 },
+    [naturalSizes]
+  );
 
   // FLIP + Staggered Entrance animation refs
   const galleryRef = useRef<HTMLDivElement>(null);
@@ -432,7 +452,10 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
     return timelineEntries[Math.floor(ratio * timelineEntries.length)]?.ym ?? null;
   }, [timelineEntries]);
 
-  const mosaicRows = useMemo(() => buildJustifiedRows(displayCards), [displayCards]);
+  const mosaicRows = useMemo(
+    () => buildJustifiedRows(displayCards, effDim),
+    [displayCards, effDim]
+  );
 
   const hasActiveFilter = category !== "all" || camera !== "all" || lens !== "all";
 
@@ -798,7 +821,8 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
                 <div key={rIdx} className={`flex flex-col sm:flex-row gap-2 ${rIdx >= 2 ? "cv-auto" : ""}`}>
                   {row.items.map((card) => {
                     const { photo, flatIdx, isStackedCover, groupTotal, groupIndex } = card;
-                    const ratio = Math.max(0.55, Math.min(2.4, (photo.width || 1600) / (photo.height || 1068)));
+                    const dim = effDim(photo);
+                    const ratio = Math.max(0.45, Math.min(2.6, dim.w / dim.h));
                     const title = cardTitle(card);
                     const place = pick(photo.location, photo.locationEn);
                     return (
@@ -817,7 +841,8 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
                           ambient={photo.ambient}
                           blurData={photo.blurData}
                           priority={rIdx === 0}
-                          aspectRatio={`${photo.width || 1600} / ${photo.height || 1068}`}
+                          aspectRatio={String(ratio)}
+                          onNaturalSize={handleNaturalSize}
                           groupBadge={
                             groupTotal > 1
                               ? isStackedCover
@@ -862,7 +887,8 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5 sm:gap-6 sm:auto-rows-[305px] grid-flow-dense">
               {displayCards.map((card, cardIdx) => {
                 const { photo, flatIdx, isStackedCover, groupTotal, groupIndex } = card;
-                const isPortrait = (photo.height || 1068) > (photo.width || 1600) * 1.1;
+                const dim = effDim(photo);
+                const isPortrait = dim.h > dim.w * 1.1;
                 const title = cardTitle(card);
                 const place = pick(photo.location, photo.locationEn);
 
@@ -884,7 +910,8 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
                         ambient={photo.ambient}
                         blurData={photo.blurData}
                         priority={cardIdx < 4}
-                        style={{ "--mobile-ar": `${photo.width || 1600} / ${photo.height || 1068}` } as React.CSSProperties}
+                        onNaturalSize={handleNaturalSize}
+                        style={{ "--mobile-ar": `${dim.w} / ${dim.h}` } as React.CSSProperties}
                         groupBadge={
                           groupTotal > 1
                             ? isStackedCover

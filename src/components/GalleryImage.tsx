@@ -21,6 +21,15 @@ interface GalleryImageProps {
   style?: CSSProperties;
   showLoupe?: boolean;
   groupBadge?: string | number;
+  onNaturalSize?: (photoId: number, naturalWidth: number, naturalHeight: number) => void;
+}
+
+function parseAspectRatio(raw?: string): number | null {
+  if (!raw) return null;
+  const parts = raw.split("/").map((s) => Number(s.trim()));
+  if (parts.length === 2 && parts[0] > 0 && parts[1] > 0) return parts[0] / parts[1];
+  const single = Number(raw);
+  return Number.isFinite(single) && single > 0 ? single : null;
 }
 
 export function GalleryImage({
@@ -37,21 +46,42 @@ export function GalleryImage({
   style,
   showLoupe = true,
   groupBadge,
+  onNaturalSize,
 }: GalleryImageProps) {
   const { copyrightGuard } = usePreferences();
   const imgRef = useRef<HTMLImageElement>(null);
   const [loaded, setLoaded] = useState(false);
   const [settled, setSettled] = useState(false);
+  const [correctedRatio, setCorrectedRatio] = useState<string | undefined>(undefined);
+
+  const syncNaturalRatio = (el: HTMLImageElement) => {
+    const nw = el.naturalWidth;
+    const nh = el.naturalHeight;
+    if (!nw || !nh) return;
+    if (aspectRatio) {
+      const expected = parseAspectRatio(aspectRatio);
+      const actual = nw / nh;
+      if (expected && Math.abs(actual - expected) / expected > 0.04) {
+        setCorrectedRatio(`${nw} / ${nh}`);
+      }
+    }
+    if (photoId !== undefined && onNaturalSize) {
+      onNaturalSize(photoId, nw, nh);
+    }
+  };
 
   useEffect(() => {
+    setCorrectedRatio(undefined);
     const el = imgRef.current;
     if (el && el.complete && el.naturalWidth > 0) {
       setLoaded(true);
       setSettled(true);
+      syncNaturalRatio(el);
     } else {
       setLoaded(false);
       setSettled(false);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [src]);
 
   useEffect(() => {
@@ -63,7 +93,7 @@ export function GalleryImage({
   return (
     <div
       style={{
-        aspectRatio,
+        aspectRatio: correctedRatio ?? aspectRatio,
         ...style,
       }}
       className={`group/img relative ${className}`}
@@ -97,7 +127,10 @@ export function GalleryImage({
           fetchPriority={priority ? "high" : undefined}
           alt={alt}
           draggable={!copyrightGuard}
-          onLoad={() => setLoaded(true)}
+          onLoad={(e) => {
+            setLoaded(true);
+            syncNaturalRatio(e.currentTarget);
+          }}
           className={`relative block w-full h-full object-cover transition-[transform,opacity] duration-400 ease-[cubic-bezier(0.22,1,0.36,1)] ${
             loaded ? "opacity-100" : "opacity-0"
           } group-hover:scale-[1.03] group-hover/img:scale-[1.03] ${imgClassName}`}

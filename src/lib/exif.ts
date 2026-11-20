@@ -29,8 +29,12 @@ export function extractExifFromBuffer(buffer: Buffer | ArrayBuffer | Uint8Array)
     const file = (tags.file || {}) as Record<string, { description?: string; value?: unknown }>;
     const gps = tags.gps || {};
 
-    const width = Number(file["Image Width"]?.value || exif.PixelXDimension?.value || 0) || undefined;
-    const height = Number(file["Image Height"]?.value || exif.PixelYDimension?.value || 0) || undefined;
+    const rawWidth = Number(file["Image Width"]?.value || exif.PixelXDimension?.value || 0) || undefined;
+    const rawHeight = Number(file["Image Height"]?.value || exif.PixelYDimension?.value || 0) || undefined;
+    const orientation = Number(exif.Orientation?.value || 1);
+    const swapAxes = orientation >= 5 && orientation <= 8;
+    const width = swapAxes ? rawHeight : rawWidth;
+    const height = swapAxes ? rawWidth : rawHeight;
 
     const camera = cleanCameraName(exif.Make?.description, exif.Model?.description);
     const lens = (exif.LensModel?.description || "").trim();
