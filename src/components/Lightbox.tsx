@@ -499,6 +499,9 @@ export function Lightbox({
     };
   }, [photo]);
 
+  const groupMap = useMemo(() => buildGroupMap(photos), [photos]);
+  const photoIndexById = useMemo(() => new Map(photos.map((p, i) => [p.id, i])), [photos]);
+
   if (activeIndex === null || !photo) return null;
 
   const zoomInStep = () => {
@@ -681,9 +684,7 @@ export function Lightbox({
     setTimeout(() => setCopiedShare(false), 1800);
   };
 
-  const groupMap = useMemo(() => buildGroupMap(photos), [photos]);
-  const photoIndexById = useMemo(() => new Map(photos.map((p, i) => [p.id, i])), [photos]);
-  const groupInfo = photo ? groupMap.get(photo.id) : undefined;
+  const groupInfo = groupMap.get(photo.id);
 
   const belongingCols = collectionsMap?.[photo.id] ?? [];
   const numberedZh = formatNumberedTitle(photo.title, groupInfo);

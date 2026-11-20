@@ -1050,7 +1050,7 @@ export function AdminClient({
     router.refresh();
   };
 
-  const syncDocumentBranding = useCallback((next: Record<string, string>) => {
+  const syncDocumentBranding = (next: Record<string, string>) => {
     if (typeof document === "undefined") return;
     document.title = resolveSiteTitle(next);
     const href = resolveFaviconUrl(next);
@@ -1061,14 +1061,14 @@ export function AdminClient({
       document.head.appendChild(iconLink);
     }
     iconLink.href = href;
-  }, []);
+  };
 
-  const closeCropModal = useCallback(() => {
+  const closeCropModal = () => {
     setCropModal((prev) => {
       if (prev?.revokeOnClose) URL.revokeObjectURL(prev.src);
       return null;
     });
-  }, []);
+  };
 
   const openLocalFileCrop = (mode: "avatar" | "favicon", file?: File | null) => {
     if (!file) return;
