@@ -3,7 +3,7 @@ import { asc, eq, inArray } from "drizzle-orm";
 import { isAdminAuthenticated } from "@/lib/auth";
 import { db, ensureDb } from "@/lib/db";
 import { collectionPhotos, photos } from "@/lib/db/schema";
-import { generateGroupId } from "@/lib/photo-groups";
+import { clusterGroupSiblings, generateGroupId } from "@/lib/photo-groups";
 import { getAllPhotos, invalidateGalleryCache } from "@/lib/queries";
 
 async function normalizeOrCleanupGroups(groupIds: string[]) {
@@ -140,13 +140,23 @@ export async function PUT(req: Request) {
   }
   await ensureDb();
   const { orderedIds } = (await req.json()) as { orderedIds: number[] };
-  if (Array.isArray(orderedIds)) {
+  if (Array.isArray(orderedIds) && orderedIds.length > 0) {
+    const allRows = await db.select().from(photos);
+    const byId = new Map(allRows.map((p) => [p.id, p]));
+    const prelim = orderedIds
+      .map((id) => byId.get(Number(id)))
+      .filter((p): p is (typeof allRows)[number] => Boolean(p));
+    const seen = new Set(prelim.map((p) => p.id));
+    for (const r of allRows) {
+      if (!seen.has(r.id)) prelim.push(r);
+    }
+    const clustered = clusterGroupSiblings(prelim);
     await Promise.all(
-      orderedIds.map((id, i) =>
+      clustered.map((p, i) =>
         db
           .update(photos)
           .set({ sortOrder: i + 1 })
-          .where(eq(photos.id, Number(id)))
+          .where(eq(photos.id, p.id))
       )
     );
   }
@@ -210,11 +220,13 @@ export async function PATCH(req: Request) {
     }
 
     const anchor = ordered[0];
-    const targetGroupId = anchor.groupId || existingGroupIds[0] || generateGroupId();
-    const anchorLinks = await db
+    const requestedMetaId = Number(body.metadataFromId || body.anchorId || 0);
+    const metaSource = (requestedMetaId ? rowMap.get(requestedMetaId) : undefined) || anchor;
+    const targetGroupId = metaSource.groupId || anchor.groupId || existingGroupIds[0] || generateGroupId();
+    const sourceLinks = await db
       .select()
       .from(collectionPhotos)
-      .where(eq(collectionPhotos.photoId, anchor.id));
+      .where(inArray(collectionPhotos.photoId, ordered.map((m) => m.id)));
 
     await Promise.all(
       ordered.map((member, idx) =>
@@ -223,34 +235,56 @@ export async function PATCH(req: Request) {
           .set({
             groupId: targetGroupId,
             groupOrder: idx + 1,
-            groupExpanded: Boolean(anchor.groupExpanded),
-            title: anchor.title,
-            titleEn: anchor.titleEn,
-            description: anchor.description,
-            descriptionEn: anchor.descriptionEn,
-            category: anchor.category,
-            location: anchor.location,
-            locationEn: anchor.locationEn,
-            lat: anchor.lat,
-            lng: anchor.lng,
+            sortOrder: anchor.sortOrder,
+            groupExpanded: Boolean(metaSource.groupExpanded || anchor.groupExpanded),
+            title: metaSource.title,
+            titleEn: metaSource.titleEn,
+            description: metaSource.description,
+            descriptionEn: metaSource.descriptionEn,
+            category: metaSource.category,
+            location: metaSource.location,
+            locationEn: metaSource.locationEn,
+            lat: metaSource.lat,
+            lng: metaSource.lng,
           })
           .where(eq(photos.id, member.id))
       )
     );
 
-    if (anchorLinks.length > 0) {
+    if (sourceLinks.length > 0) {
+      const uniqueCols = new Map<number, number>();
+      for (const link of sourceLinks) {
+        if (!uniqueCols.has(link.collectionId)) {
+          uniqueCols.set(link.collectionId, link.sortOrder);
+        }
+      }
       for (const member of ordered) {
-        for (const link of anchorLinks) {
+        for (const [collectionId, sortOrder] of uniqueCols) {
           await db
             .insert(collectionPhotos)
-            .values({ collectionId: link.collectionId, photoId: member.id, sortOrder: link.sortOrder })
+            .values({ collectionId, photoId: member.id, sortOrder })
             .onConflictDoNothing();
         }
       }
     }
 
+    // Re-normalize sequential sortOrder across all photos so group siblings stay strictly contiguous in DB
+    const refreshedAll = await getAllPhotos({ includeHidden: true });
+    await Promise.all(
+      refreshedAll.map((p, i) =>
+        p.sortOrder !== i + 1
+          ? db.update(photos).set({ sortOrder: i + 1 }).where(eq(photos.id, p.id))
+          : Promise.resolve()
+      )
+    );
+
     invalidateGalleryCache();
-    return NextResponse.json({ ok: true, groupId: targetGroupId, count: ordered.length });
+    return NextResponse.json({
+      ok: true,
+      groupId: targetGroupId,
+      metadataFromId: metaSource.id,
+      count: ordered.length,
+    });
   }
 
   if (action === "group_reorder") {

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type CSSProperties } from "react";
-import { Maximize2 } from "lucide-react";
+import { Layers, Maximize2 } from "lucide-react";
 import { optImg, optSrcSet } from "@/lib/image-url";
 import { usePreferences } from "./PreferencesProvider";
 
@@ -20,6 +20,7 @@ interface GalleryImageProps {
   imgClassName?: string;
   style?: CSSProperties;
   showLoupe?: boolean;
+  groupBadge?: string | number;
 }
 
 export function GalleryImage({
@@ -35,6 +36,7 @@ export function GalleryImage({
   imgClassName = "",
   style,
   showLoupe = true,
+  groupBadge,
 }: GalleryImageProps) {
   const { copyrightGuard } = usePreferences();
   const imgRef = useRef<HTMLImageElement>(null);
@@ -107,11 +109,18 @@ export function GalleryImage({
           className="pointer-events-none absolute inset-0 bg-gradient-to-tr from-transparent via-white/[0.03] to-white/[0.08] opacity-0 transition-opacity duration-300 group-hover:opacity-100 group-hover/img:opacity-100"
         />
 
+        {groupBadge !== undefined && groupBadge !== "" && (
+          <span className="pointer-events-none absolute left-2.5 top-2.5 z-10 inline-flex h-7 items-center gap-1 rounded-full border border-white/20 bg-black/58 px-2.5 text-[11px] font-medium text-white">
+            <Layers className="h-3 w-3 shrink-0" />
+            <span>{groupBadge}</span>
+          </span>
+        )}
+
         {/* Restrained tactile corner loupe badge on hover (no per-card backdrop-filter) */}
         {showLoupe && (
           <span
             aria-hidden="true"
-            className="pointer-events-none absolute right-2.5 top-2.5 flex h-7 w-7 items-center justify-center rounded-full border border-white/20 bg-black/62 text-white/90 opacity-0 scale-90 transition-[opacity,transform] duration-250 ease-out group-hover:opacity-100 group-hover:scale-100 group-hover/img:opacity-100 group-hover/img:scale-100"
+            className="pointer-events-none absolute right-2.5 top-2.5 z-10 flex h-7 w-7 items-center justify-center rounded-full border border-white/20 bg-black/62 text-white/90 opacity-0 scale-90 transition-[opacity,transform] duration-250 ease-out group-hover:opacity-100 group-hover:scale-100 group-hover/img:opacity-100 group-hover/img:scale-100"
           >
             <Maximize2 className="h-3.5 w-3.5 stroke-[1.6]" />
           </span>

@@ -176,6 +176,11 @@ export async function GET(req: Request) {
                   properties: {
                     ids: { type: "array", items: { type: "integer" } },
                     groupId: { type: "string" },
+                    metadataFromId: {
+                      type: "integer",
+                      description:
+                        "For group_merge: ID of the photo whose title, description, category, and location/GPS should be kept across the merged group (defaults to ids[0]).",
+                    },
                     action: {
                       type: "string",
                       enum: [

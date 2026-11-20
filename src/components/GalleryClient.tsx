@@ -95,7 +95,7 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
   const initialLens = searchParams.get("lens") || "all";
   const qView = searchParams.get("view");
   const initialView: "mosaic" | "index" | "sheet" =
-    qView === "index" ? "index" : qView === "sheet" ? "sheet" : "mosaic";
+    qView === "mosaic" ? "mosaic" : qView === "sheet" ? "sheet" : "index";
   const initialSort: "time" | "recommended" =
     searchParams.get("sort") === "recommended" ? "recommended" : "time";
 
@@ -578,21 +578,8 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
                 />
               </button>
 
-              {/* Icon-Only View Switcher */}
+              {/* Icon-Only View Switcher (Default: Index) */}
               <div className="flex items-center rounded-md border border-[var(--border)] overflow-hidden">
-                <button
-                  type="button"
-                  onClick={() => changeView("mosaic")}
-                  aria-label={locale === "en" ? "Mosaic View" : "密铺视图"}
-                  title={locale === "en" ? "Mosaic View" : "密铺视图"}
-                  className={`p-2 transition-colors duration-200 cursor-pointer ${
-                    view === "mosaic"
-                      ? "bg-[var(--fg)] text-[var(--bg)]"
-                      : "bg-[var(--bg-elevated)] text-[var(--fg-muted)] hover:text-[var(--fg)]"
-                  }`}
-                >
-                  <Rows3 className="h-4 w-4" />
-                </button>
                 <button
                   type="button"
                   onClick={() => changeView("index")}
@@ -605,6 +592,19 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
                   }`}
                 >
                   <LayoutGrid className="h-4 w-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => changeView("mosaic")}
+                  aria-label={locale === "en" ? "Mosaic View" : "密铺视图"}
+                  title={locale === "en" ? "Mosaic View" : "密铺视图"}
+                  className={`p-2 transition-colors duration-200 cursor-pointer ${
+                    view === "mosaic"
+                      ? "bg-[var(--fg)] text-[var(--bg)]"
+                      : "bg-[var(--bg-elevated)] text-[var(--fg-muted)] hover:text-[var(--fg)]"
+                  }`}
+                >
+                  <Rows3 className="h-4 w-4" />
                 </button>
                 <button
                   type="button"
@@ -813,14 +813,15 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
                           blurData={photo.blurData}
                           priority={rIdx === 0}
                           aspectRatio={`${photo.width || 1600} / ${photo.height || 1068}`}
+                          groupBadge={
+                            groupTotal > 1
+                              ? isStackedCover
+                                ? groupTotal
+                                : `${groupIndex}/${groupTotal}`
+                              : undefined
+                          }
                           className="w-full h-full"
                         />
-                        {groupTotal > 1 && (
-                          <span className="pointer-events-none absolute right-2.5 top-2.5 z-10 inline-flex items-center gap-1 rounded-full border border-white/20 bg-black/55 px-2 py-0.5 text-[11px] font-medium text-white backdrop-blur-md">
-                            <Layers className="h-3 w-3" />
-                            <span>{isStackedCover ? groupTotal : `${groupIndex}/${groupTotal}`}</span>
-                          </span>
-                        )}
                         <figcaption className="glass-strip pointer-events-none absolute inset-x-0 bottom-0 flex items-center justify-between gap-3 px-3.5 py-2.5 text-sm text-zinc-100 opacity-0 translate-y-1 transition-all duration-300 group-hover:opacity-100 group-hover:translate-y-0">
                           <div className="min-w-0">
                             <div className="truncate font-medium">{title}</div>
@@ -879,14 +880,15 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
                         blurData={photo.blurData}
                         priority={cardIdx < 4}
                         style={{ "--mobile-ar": `${photo.width || 1600} / ${photo.height || 1068}` } as React.CSSProperties}
+                        groupBadge={
+                          groupTotal > 1
+                            ? isStackedCover
+                              ? groupTotal
+                              : `${groupIndex}/${groupTotal}`
+                            : undefined
+                        }
                         className="flex-1 [aspect-ratio:var(--mobile-ar)] sm:[aspect-ratio:auto] sm:min-h-0"
                       />
-                      {groupTotal > 1 && (
-                        <span className="pointer-events-none absolute right-2.5 top-2.5 z-10 inline-flex items-center gap-1 rounded-full border border-white/20 bg-black/55 px-2 py-0.5 text-[11px] font-medium text-white backdrop-blur-md">
-                          <Layers className="h-3 w-3" />
-                          <span>{isStackedCover ? groupTotal : `${groupIndex}/${groupTotal}`}</span>
-                        </span>
-                      )}
                     </div>
                     <figcaption className="pt-2.5 shrink-0 flex items-center justify-between gap-3 text-sm">
                       <div className="flex items-center gap-2 min-w-0">

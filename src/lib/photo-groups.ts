@@ -21,11 +21,7 @@ export function generateGroupId(): string {
   return `grp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
 }
 
-/**
- * Builds a lookup from photo.id -> PhotoGroupInfo for all groups that have >= 2 photos in `list`.
- * Singletons (groups with only 1 visible photo) gracefully behave as normal standalone photos.
- */
-export function buildGroupMap(list: Photo[]): Map<number, PhotoGroupInfo> {
+function collectValidGroupBuckets(list: Photo[]): Map<string, Photo[]> {
   const buckets = new Map<string, Photo[]>();
   for (const p of list) {
     if (!p.groupId) continue;
@@ -33,11 +29,47 @@ export function buildGroupMap(list: Photo[]): Map<number, PhotoGroupInfo> {
     if (arr) arr.push(p);
     else buckets.set(p.groupId, [p]);
   }
+  for (const [gid, arr] of buckets) {
+    if (arr.length < 2) {
+      buckets.delete(gid);
+    } else {
+      arr.sort((a, b) => a.groupOrder - b.groupOrder || a.id - b.id);
+    }
+  }
+  return buckets;
+}
 
+/**
+ * Ensures multi-photo groups are always contiguous (1 -> 2 -> 3...) at the position
+ * where each group first appears in `list`.
+ */
+export function clusterGroupSiblings(list: Photo[]): Photo[] {
+  const buckets = collectValidGroupBuckets(list);
+  if (buckets.size === 0) return list;
+
+  const out: Photo[] = [];
+  const emitted = new Set<string>();
+  for (const p of list) {
+    const siblings = p.groupId ? buckets.get(p.groupId) : undefined;
+    if (!siblings) {
+      out.push(p);
+      continue;
+    }
+    if (emitted.has(p.groupId)) continue;
+    emitted.add(p.groupId);
+    out.push(...siblings);
+  }
+  return out;
+}
+
+/**
+ * Builds a lookup from photo.id -> PhotoGroupInfo for all groups that have >= 2 photos in `list`.
+ * Singletons (groups with only 1 visible photo) gracefully behave as normal standalone photos.
+ */
+export function buildGroupMap(list: Photo[]): Map<number, PhotoGroupInfo> {
+  const buckets = collectValidGroupBuckets(list);
   const map = new Map<number, PhotoGroupInfo>();
-  for (const [groupId, members] of buckets) {
-    if (members.length < 2) continue;
-    const sorted = [...members].sort((a, b) => a.groupOrder - b.groupOrder || a.id - b.id);
+  for (const [groupId, sorted] of buckets) {
     const isExpanded = Boolean(sorted[0]?.groupExpanded);
     sorted.forEach((p, idx) => {
       map.set(p.id, {
@@ -74,22 +106,7 @@ export function collapsePhotoListForDisplay(
   sortedList: Photo[],
   opts?: { forceExpandAll?: boolean; alwaysStack?: boolean }
 ): { cards: DisplayPhotoCard[]; lightboxPhotos: Photo[] } {
-  const buckets = new Map<string, Photo[]>();
-  for (const p of sortedList) {
-    if (!p.groupId) continue;
-    const arr = buckets.get(p.groupId);
-    if (arr) arr.push(p);
-    else buckets.set(p.groupId, [p]);
-  }
-
-  for (const [gid, arr] of buckets) {
-    if (arr.length < 2) {
-      buckets.delete(gid);
-    } else {
-      arr.sort((a, b) => a.groupOrder - b.groupOrder || a.id - b.id);
-    }
-  }
-
+  const buckets = collectValidGroupBuckets(sortedList);
   const lightboxPhotos: Photo[] = [];
   const cards: DisplayPhotoCard[] = [];
   const emittedGroups = new Set<string>();

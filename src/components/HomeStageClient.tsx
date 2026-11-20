@@ -406,14 +406,15 @@ export function HomeStageClient({
                           ambient={item.ambient}
                           blurData={item.blurData}
                           aspectRatio={`${item.width || 1600} / ${item.height || 1068}`}
+                          groupBadge={
+                            groupTotal > 1
+                              ? isStackedCover
+                                ? groupTotal
+                                : `${groupIndex}/${groupTotal}`
+                              : undefined
+                          }
                           className="w-full h-full"
                         />
-                        {groupTotal > 1 && (
-                          <span className="pointer-events-none absolute right-2.5 top-2.5 z-10 inline-flex items-center gap-1 rounded-full border border-white/20 bg-black/55 px-2 py-0.5 text-[11px] font-medium text-white backdrop-blur-md">
-                            <Layers className="h-3 w-3" />
-                            <span>{isStackedCover ? groupTotal : `${groupIndex}/${groupTotal}`}</span>
-                          </span>
-                        )}
                         <figcaption className="glass-strip pointer-events-none absolute inset-x-0 bottom-0 flex items-center justify-between px-3.5 py-2.5 text-sm text-zinc-100 opacity-0 translate-y-1 transition-all duration-300 group-hover:opacity-100 group-hover:translate-y-0">
                           <span className="truncate font-medium">{iTitle}</span>
                           {iPlace && (

@@ -260,6 +260,11 @@ export function AdminClient({
     src: string;
     revokeOnClose?: boolean;
   } | null>(null);
+  const [mergeModal, setMergeModal] = useState<{
+    orderedIds: number[];
+    metadataFromId: number;
+  } | null>(null);
+  const [mergingGroup, setMergingGroup] = useState(false);
   const avatarFileRef = useRef<HTMLInputElement>(null);
   const faviconFileRef = useRef<HTMLInputElement>(null);
 
@@ -674,14 +679,137 @@ export function AdminClient({
     router.refresh();
   };
 
+  const partitionContiguousBlocks = (list: Photo[]): Photo[][] => {
+    const blocks: Photo[][] = [];
+    const seenGroups = new Set<string>();
+    for (const p of list) {
+      const g = adminGroupMap.get(p.id);
+      if (!g) {
+        blocks.push([p]);
+      } else if (!seenGroups.has(g.groupId)) {
+        seenGroups.add(g.groupId);
+        blocks.push(g.siblings);
+      }
+    }
+    return blocks;
+  };
+
   const movePhotoBy = (photoId: number, dir: -1 | 1, e?: React.MouseEvent) => {
     e?.stopPropagation();
-    const idx = photoList.findIndex((p) => p.id === photoId);
-    const target = idx + dir;
-    if (idx < 0 || target < 0 || target >= photoList.length) return;
-    const next = [...photoList];
-    [next[idx], next[target]] = [next[target], next[idx]];
-    persistPhotoOrder(next);
+    const blocks = partitionContiguousBlocks(photoList);
+    const bIdx = blocks.findIndex((b) => b.some((p) => p.id === photoId));
+    const targetIdx = bIdx + dir;
+    if (bIdx < 0 || targetIdx < 0 || targetIdx >= blocks.length) return;
+    [blocks[bIdx], blocks[targetIdx]] = [blocks[targetIdx], blocks[bIdx]];
+    persistPhotoOrder(blocks.flat());
+  };
+
+  const handleLibraryPhotoDrop = async (fromIdx: number, toIdx: number) => {
+    if (fromIdx < 0 || toIdx < 0 || fromIdx === toIdx) return;
+    const moved = photoList[fromIdx];
+    const target = photoList[toIdx];
+    if (!moved || !target) return;
+
+    const movedGroup = adminGroupMap.get(moved.id);
+    if (movedGroup && moved.groupId === target.groupId) {
+      const sibs = [...movedGroup.siblings];
+      const f = sibs.findIndex((s) => s.id === moved.id);
+      const t = sibs.findIndex((s) => s.id === target.id);
+      if (f < 0 || t < 0 || f === t) return;
+      const [item] = sibs.splice(f, 1);
+      sibs.splice(t, 0, item);
+      await fetch("/api/admin/photos", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "group_reorder", ids: sibs.map((s) => s.id) }),
+      });
+      await refreshAdminPhotos(moved.id);
+      notify("组内顺序已更新");
+      return;
+    }
+
+    const blocks = partitionContiguousBlocks(photoList);
+    const fromBlockIdx = blocks.findIndex((b) => b.some((p) => p.id === moved.id));
+    const toBlockIdx = blocks.findIndex((b) => b.some((p) => p.id === target.id));
+    if (fromBlockIdx < 0 || toBlockIdx < 0 || fromBlockIdx === toBlockIdx) return;
+    const [block] = blocks.splice(fromBlockIdx, 1);
+    blocks.splice(toBlockIdx, 0, block);
+    persistPhotoOrder(blocks.flat());
+  };
+
+  const openMergeGroupModal = () => {
+    const byId = new Map(photoList.map((p) => [p.id, p]));
+    const ordered: Photo[] = [];
+    const seen = new Set<number>();
+    const touchedGroups = new Set<string>();
+
+    for (const id of selectedIds) {
+      const p = byId.get(id);
+      if (p && !seen.has(p.id)) {
+        ordered.push(p);
+        seen.add(p.id);
+        if (p.groupId) touchedGroups.add(p.groupId);
+      }
+    }
+    for (const p of photoList) {
+      if (p.groupId && touchedGroups.has(p.groupId) && !seen.has(p.id)) {
+        ordered.push(p);
+        seen.add(p.id);
+      }
+    }
+
+    if (ordered.length < 2) {
+      notify("请至少选择 2 幅作品合并为组图");
+      return;
+    }
+
+    const richest =
+      ordered.find((p) => p.description.trim() && p.location.trim()) ||
+      ordered.find((p) => p.description.trim()) ||
+      ordered[0];
+
+    setMergeModal({
+      orderedIds: ordered.map((p) => p.id),
+      metadataFromId: richest.id,
+    });
+  };
+
+  const confirmMergeGroup = async () => {
+    if (!mergeModal) return;
+    setMergingGroup(true);
+    const res = await fetch("/api/admin/photos", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "group_merge",
+        ids: mergeModal.orderedIds,
+        metadataFromId: mergeModal.metadataFromId,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    setMergingGroup(false);
+    if (!res.ok) {
+      notify(data.error || "合并组图失败");
+      return;
+    }
+    const sourcePhoto = photoList.find((p) => p.id === mergeModal.metadataFromId);
+    setMergeModal(null);
+    setSelectedIds([]);
+    const freshRes = await fetch("/api/admin/photos");
+    if (freshRes.ok) {
+      const freshData = await freshRes.json();
+      if (Array.isArray(freshData.photos)) {
+        setPhotoList(freshData.photos);
+        const firstMerged = freshData.photos.find(
+          (p: Photo) => p.groupId === data.groupId && p.groupOrder === 1
+        );
+        if (firstMerged) selectInspectorPhoto(firstMerged);
+      }
+    }
+    notify(
+      `已合并为组图（共 ${data.count} 幅，保留《${sourcePhoto?.title || "所选作品"}》的标题与描述）`
+    );
+    router.refresh();
   };
 
   const toggleFeatured = async (photo: Photo, e?: React.MouseEvent) => {
@@ -1731,10 +1859,7 @@ export function AdminClient({
                           const from = dragPhotoIdxRef.current;
                           dragPhotoIdxRef.current = null;
                           if (from === null || from === realIdx || realIdx < 0) return;
-                          const next = [...photoList];
-                          const [moved] = next.splice(from, 1);
-                          next.splice(realIdx, 0, moved);
-                          persistPhotoOrder(next);
+                          handleLibraryPhotoDrop(from, realIdx);
                         }}
                         onClick={() => selectInspectorPhoto(photo)}
                         className={`surface-card group relative overflow-hidden rounded-lg cursor-pointer transition ${
@@ -1851,10 +1976,7 @@ export function AdminClient({
                           const from = dragPhotoIdxRef.current;
                           dragPhotoIdxRef.current = null;
                           if (from === null || from === realIdx || realIdx < 0) return;
-                          const next = [...photoList];
-                          const [moved] = next.splice(from, 1);
-                          next.splice(realIdx, 0, moved);
-                          persistPhotoOrder(next);
+                          handleLibraryPhotoDrop(from, realIdx);
                         }}
                         onClick={() => selectInspectorPhoto(photo)}
                         className={`flex items-center justify-between gap-3 px-4 py-2.5 text-xs cursor-pointer transition ${
@@ -2501,8 +2623,8 @@ export function AdminClient({
                       selectedIds.length < 2 &&
                       !selectedIds.some((id) => Boolean(adminGroupMap.get(id)))
                     }
-                    onClick={() => runBatchAction("group_merge")}
-                    title="按选择顺序合并为组图，自动继承第 1 幅作品的标题、描述与地点并编号 1、2、3"
+                    onClick={openMergeGroupModal}
+                    title="合并为组图，可自由选择保留哪张照片的标题、描述与地点信息并调整组内顺序"
                     className="inline-flex items-center gap-1 rounded bg-[var(--fg)] px-2.5 py-1 font-medium text-[var(--bg)] hover:opacity-90 cursor-pointer"
                   >
                     <Layers className="h-3.5 w-3.5" />
@@ -3887,6 +4009,144 @@ export function AdminClient({
             </div>
           </form>
         </main>
+      )}
+
+      {mergeModal && (
+        <div
+          onClick={() => !mergingGroup && setMergeModal(null)}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/65 backdrop-blur-sm p-4"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="surface-card flex max-h-[86dvh] w-full max-w-2xl flex-col rounded-2xl p-5 space-y-4 shadow-2xl text-xs"
+          >
+            <div className="flex items-start justify-between gap-3 border-b border-[var(--border)] pb-3">
+              <div className="space-y-0.5">
+                <h3 className="inline-flex items-center gap-1.5 text-sm font-semibold text-[var(--fg)]">
+                  <Layers className="h-4 w-4 opacity-85" />
+                  <span>合并为组图（共 {mergeModal.orderedIds.length} 幅）</span>
+                </h3>
+                <p className="text-[var(--fg-muted)]">
+                  点击卡片选择要保留哪张作品的<strong>标题、描述、分类与地点坐标</strong>；右侧箭头可微调组内编号顺序（1 → {mergeModal.orderedIds.length}）。
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setMergeModal(null)}
+                className="rounded-full p-1 text-[var(--fg-muted)] hover:text-[var(--fg)] cursor-pointer"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto space-y-2.5 pr-1">
+              {mergeModal.orderedIds.map((pid, idx) => {
+                const p = photoMap.get(pid);
+                if (!p) return null;
+                const isMetaSource = mergeModal.metadataFromId === pid;
+                return (
+                  <div
+                    key={pid}
+                    onClick={() => setMergeModal({ ...mergeModal, metadataFromId: pid })}
+                    className={`flex items-start justify-between gap-3 rounded-xl border p-3 transition cursor-pointer ${
+                      isMetaSource
+                        ? "border-[var(--fg)] bg-[var(--bg-subtle)] ring-1 ring-[var(--fg)]"
+                        : "border-[var(--border)] hover:border-[var(--fg-muted)]"
+                    }`}
+                  >
+                    <div className="flex items-start gap-3 min-w-0 flex-1">
+                      <div className="relative h-16 w-24 shrink-0 overflow-hidden rounded-md bg-[var(--bg-subtle)]">
+                        <img
+                          src={optImg(p.url, 256, 75)}
+                          loading="lazy"
+                          decoding="async"
+                          alt=""
+                          className="h-full w-full object-cover"
+                        />
+                        <span className="absolute left-1.5 top-1.5 rounded bg-black/75 px-1.5 py-0.5 text-[10px] font-semibold text-white">
+                          #{idx + 1}
+                        </span>
+                      </div>
+
+                      <div className="min-w-0 flex-1 space-y-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-semibold text-sm text-[var(--fg)] truncate">
+                            {p.title || "未命名"}
+                          </span>
+                          {p.location && (
+                            <span className="inline-flex items-center gap-0.5 text-[11px] text-[var(--fg-muted)]">
+                              <MapPin className="h-3 w-3" />
+                              {p.location}
+                            </span>
+                          )}
+                          {isMetaSource && (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-400">
+                              <Check className="h-3 w-3" /> 保留此张描述与信息
+                            </span>
+                          )}
+                        </div>
+                        <p className="line-clamp-2 text-[11px] leading-relaxed text-[var(--fg-muted)]">
+                          {p.description ? p.description : "（该照片暂无文字描述）"}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div
+                      onClick={(e) => e.stopPropagation()}
+                      className="flex items-center gap-1 shrink-0 pt-1"
+                    >
+                      <button
+                        type="button"
+                        disabled={idx === 0}
+                        title="组内前移"
+                        onClick={() => {
+                          const next = [...mergeModal.orderedIds];
+                          [next[idx - 1], next[idx]] = [next[idx], next[idx - 1]];
+                          setMergeModal({ ...mergeModal, orderedIds: next });
+                        }}
+                        className="rounded border border-[var(--border)] p-1 text-[var(--fg-muted)] hover:text-[var(--fg)] disabled:opacity-25 cursor-pointer"
+                      >
+                        <ArrowUp className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        disabled={idx === mergeModal.orderedIds.length - 1}
+                        title="组内后移"
+                        onClick={() => {
+                          const next = [...mergeModal.orderedIds];
+                          [next[idx], next[idx + 1]] = [next[idx + 1], next[idx]];
+                          setMergeModal({ ...mergeModal, orderedIds: next });
+                        }}
+                        className="rounded border border-[var(--border)] p-1 text-[var(--fg-muted)] hover:text-[var(--fg)] disabled:opacity-25 cursor-pointer"
+                      >
+                        <ArrowDown className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="flex items-center justify-end gap-2 border-t border-[var(--border)] pt-3">
+              <button
+                type="button"
+                disabled={mergingGroup}
+                onClick={() => setMergeModal(null)}
+                className="rounded-md border border-[var(--border)] px-4 py-1.5 text-[var(--fg-muted)] hover:text-[var(--fg)] cursor-pointer"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                disabled={mergingGroup}
+                onClick={confirmMergeGroup}
+                className="rounded-md bg-[var(--fg)] px-5 py-1.5 font-medium text-[var(--bg)] hover:opacity-90 cursor-pointer"
+              >
+                {mergingGroup ? "合并中…" : `确认合并（共 ${mergeModal.orderedIds.length} 幅）`}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {cropModal && (

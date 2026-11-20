@@ -4,9 +4,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import * as maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
-import { Aperture, ArrowLeft, Compass, Globe2, Layers, MapPin, Minus, Plus } from "lucide-react";
+import { Aperture, ArrowLeft, Compass, Globe2, MapPin, Minus, Plus } from "lucide-react";
 import type { Photo } from "@/lib/db/schema";
-import { collapsePhotoListForDisplay } from "@/lib/photo-groups";
+import { collapsePhotoListForDisplay, formatNumberedTitle } from "@/lib/photo-groups";
 import { SiteHeader } from "./SiteHeader";
 import { SiteFooter } from "./SiteFooter";
 import { Lightbox } from "./Lightbox";
@@ -129,9 +129,8 @@ function formatCoord(lat: number, lng: number, detailed = false): string {
 }
 
 function getClusterRadiusDeg(zoom: number): number {
-  if (zoom >= 11) return 0.00012; // ~13m: individual street shooting spots
   if (zoom <= 2.5) return 0.45; // ~48km: clean regional/metro clusters at world view
-  return 0.45 / Math.pow(2, zoom - 2.5);
+  return Math.max(0.0003, 0.45 / Math.pow(2, zoom - 2.5)); // ~30m floor so same-spot photos stay grouped as one pin
 }
 
 export function MapClient({ photos, collectionsMap, settings }: MapClientProps) {
@@ -246,42 +245,9 @@ export function MapClient({ photos, collectionsMap, settings }: MapClientProps) 
   const initialZoom = qZoom !== null ? Number(qZoom) : focusPhotoId > 0 ? 11.5 : 1.65;
   const [zoomBucket, setZoomBucket] = useState<number>(() => Math.round(initialZoom * 2) / 2);
 
-  // 2. Dynamic Map Canvas Pins — merges same-city pins at low zoom, unclusters into exact spots as you zoom in
+  // 2. Dynamic Map Canvas Pins — merges same-city pins at low zoom, unclusters into distinct spots on zoom-in,
+  //    while ALWAYS keeping same-coordinate (and same-series) photos grouped into a single pin with a count badge.
   const mapPins = useMemo<MapPinGroup[]>(() => {
-    if (zoomBucket >= 12) {
-      const coordCounts = new Map<string, number>();
-      const coordIndex = new Map<string, number>();
-      for (const p of geoPhotos) {
-        const k = `${p.lat.toFixed(4)}_${p.lng.toFixed(4)}`;
-        coordCounts.set(k, (coordCounts.get(k) || 0) + 1);
-      }
-      return geoPhotos.map((p) => {
-        const k = `${p.lat.toFixed(4)}_${p.lng.toFixed(4)}`;
-        const total = coordCounts.get(k) || 1;
-        const idx = coordIndex.get(k) || 0;
-        coordIndex.set(k, idx + 1);
-
-        let lat = p.lat;
-        let lng = p.lng;
-        if (total > 1) {
-          const angle = (2 * Math.PI * idx) / total;
-          const offset = 0.00028 / Math.pow(1.6, Math.max(0, zoomBucket - 12));
-          lat += Math.sin(angle) * offset;
-          lng += Math.cos(angle) * offset;
-        }
-        const cKey = photoCityKeyMap.get(p.id) || null;
-        return {
-          id: `p_${p.id}`,
-          cityKey: cKey,
-          lat,
-          lng,
-          location: p.location || p.title,
-          locationEn: p.locationEn || p.titleEn || p.location || p.title,
-          photos: [p],
-        };
-      });
-    }
-
     const radius = getClusterRadiusDeg(zoomBucket);
     const mergeSameCity = zoomBucket < 8.5;
     const groups: MapPinGroup[] = [];
@@ -289,6 +255,9 @@ export function MapClient({ photos, collectionsMap, settings }: MapClientProps) 
     for (const p of geoPhotos) {
       const pCityKey = photoCityKeyMap.get(p.id) || null;
       const match = groups.find((g) => {
+        if (p.groupId && g.photos.some((m) => m.groupId === p.groupId)) {
+          return Math.hypot(g.lat - p.lat, g.lng - p.lng) < 0.02;
+        }
         if (mergeSameCity && pCityKey && g.cityKey === pCityKey) {
           // Merge same-city spots at overview zoom (guarding against cross-continent coordinate typos)
           return Math.hypot(g.lat - p.lat, g.lng - p.lng) < 2.5;
@@ -304,13 +273,16 @@ export function MapClient({ photos, collectionsMap, settings }: MapClientProps) 
         match.photos.push(p);
       } else {
         const city = pCityKey ? cityByKey.get(pCityKey) : undefined;
+        const useSpotLabel = zoomBucket >= 10 && p.location;
         groups.push({
           id: `m_${p.id}`,
           cityKey: pCityKey,
           lat: p.lat,
           lng: p.lng,
-          location: city?.location || p.location || "未知地点",
-          locationEn: city?.locationEn || p.locationEn || p.location || "Unknown",
+          location: (useSpotLabel ? p.location : city?.location || p.location) || "未知地点",
+          locationEn:
+            (useSpotLabel ? p.locationEn || p.location : city?.locationEn || p.locationEn || p.location) ||
+            "Unknown",
           photos: [p],
         });
       }
@@ -319,7 +291,20 @@ export function MapClient({ photos, collectionsMap, settings }: MapClientProps) 
   }, [cityByKey, geoPhotos, photoCityKeyMap, zoomBucket]);
 
   const [selection, setSelection] = useState<MapSelection>(() => {
-    if (focusPhotoId > 0) return { kind: "pin", photoIds: [focusPhotoId] };
+    if (focusPhotoId > 0) {
+      const target = geoPhotos.find((p) => p.id === focusPhotoId);
+      if (target) {
+        const sameSpotIds = geoPhotos
+          .filter(
+            (p) =>
+              Math.hypot(p.lat - target.lat, p.lng - target.lng) < 0.00035 ||
+              Boolean(target.groupId && p.groupId === target.groupId)
+          )
+          .map((p) => p.id);
+        return { kind: "pin", photoIds: sameSpotIds.length > 0 ? sameSpotIds : [focusPhotoId] };
+      }
+      return { kind: "pin", photoIds: [focusPhotoId] };
+    }
     return null;
   });
   const [lightboxList, setLightboxList] = useState<Photo[]>(geoPhotos);
@@ -423,7 +408,19 @@ export function MapClient({ photos, collectionsMap, settings }: MapClientProps) 
     const map = mapRef.current;
     const curZ = map?.getZoom() ?? zoomBucket;
 
-    if (pin.cityKey) {
+    let minLat = Infinity;
+    let maxLat = -Infinity;
+    let minLng = Infinity;
+    let maxLng = -Infinity;
+    for (const p of pin.photos) {
+      if (p.lat < minLat) minLat = p.lat;
+      if (p.lat > maxLat) maxLat = p.lat;
+      if (p.lng < minLng) minLng = p.lng;
+      if (p.lng > maxLng) maxLng = p.lng;
+    }
+    const isTightSpot = Math.max(maxLat - minLat, maxLng - minLng) < 0.0005;
+
+    if (!isTightSpot && pin.cityKey) {
       const city = cityByKey.get(pin.cityKey);
       if (city && (pin.photos.length === city.photos.length || city.photos.length === 1)) {
         selectCityGroup(city);
@@ -431,17 +428,19 @@ export function MapClient({ photos, collectionsMap, settings }: MapClientProps) 
       }
     }
 
-    if (pin.photos.length > 1 && curZ < 11.5) {
-      // Multi-city overview cluster: zoom in to separate cities; if single city subset, focus its photos
+    if (!isTightSpot && pin.photos.length > 1 && curZ < 11.5) {
+      // Multi-spot overview cluster: zoom in to separate spots; if single city subset, focus its photos
       flyToPhotos(pin.photos, 11.5);
       if (pin.cityKey) {
         setSelection({ kind: "city", cityKey: pin.cityKey });
+      } else {
+        setSelection({ kind: "pin", photoIds: pin.photos.map((p) => p.id) });
       }
       return;
     }
 
     setSelection({ kind: "pin", photoIds: pin.photos.map((p) => p.id) });
-    flyToPhotos(pin.photos, 12);
+    flyToPhotos(pin.photos, 12.5);
   };
 
   // Initialize MapLibre GL with Chinese-compliant cartographic style
@@ -714,10 +713,19 @@ export function MapClient({ photos, collectionsMap, settings }: MapClientProps) 
                 <div className="flex-1 overflow-y-auto px-4 py-3.5 sm:px-6 sm:py-5 space-y-4 sm:space-y-5">
                   {(() => {
                     const { cards: detailCards, lightboxPhotos: detailLbPhotos } =
-                      collapsePhotoListForDisplay(activeDetail.photos, { alwaysStack: true });
+                      collapsePhotoListForDisplay(activeDetail.photos, {
+                        forceExpandAll: activeDetail.detailedCoord,
+                        alwaysStack: !activeDetail.detailedCoord,
+                      });
                     return detailCards.map((card) => {
-                      const { photo, groupTotal } = card;
-                      const pTitle = pick(photo.title, photo.titleEn);
+                      const { photo, groupTotal, groupIndex, isStackedCover } = card;
+                      const pTitle =
+                        isStackedCover || groupTotal <= 1
+                          ? pick(photo.title, photo.titleEn)
+                          : pick(
+                              formatNumberedTitle(photo.title, { index: groupIndex, total: groupTotal }),
+                              formatNumberedTitle(photo.titleEn, { index: groupIndex, total: groupTotal })
+                            );
                       const pSpot = pick(photo.location, photo.locationEn);
                       const cityTitle = pick(activeDetail.location, activeDetail.locationEn);
                       return (
@@ -734,14 +742,15 @@ export function MapClient({ photos, collectionsMap, settings }: MapClientProps) 
                               ambient={photo.ambient}
                               blurData={photo.blurData}
                               aspectRatio={`${photo.width || 1600} / ${photo.height || 1068}`}
+                              groupBadge={
+                                groupTotal > 1
+                                  ? isStackedCover
+                                    ? groupTotal
+                                    : `${groupIndex}/${groupTotal}`
+                                  : undefined
+                              }
                               className="w-full"
                             />
-                            {groupTotal > 1 && (
-                              <span className="pointer-events-none absolute right-2.5 top-2.5 z-10 inline-flex items-center gap-1 rounded-full border border-white/20 bg-black/55 px-2 py-0.5 text-[11px] font-medium text-white backdrop-blur-md">
-                                <Layers className="h-3 w-3" />
-                                <span>{groupTotal}</span>
-                              </span>
-                            )}
                           </div>
                           <figcaption className="flex items-center justify-between gap-2 text-xs">
                             <div className="min-w-0 truncate">

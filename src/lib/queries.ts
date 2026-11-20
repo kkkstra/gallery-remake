@@ -13,6 +13,7 @@ import {
   type Photo,
 } from "./db/schema";
 import { INITIAL_SETTINGS } from "./db/seed-data";
+import { clusterGroupSiblings } from "./photo-groups";
 
 export const GALLERY_CACHE_TAG = "gallery-data";
 
@@ -28,10 +29,11 @@ export interface CollectionWithPhotos extends Collection {
 
 async function fetchAllPhotosRaw(): Promise<Photo[]> {
   await ensureDb();
-  return db
+  const rows = await db
     .select()
     .from(photos)
-    .orderBy(asc(photos.sortOrder), asc(photos.groupOrder), desc(photos.id));
+    .orderBy(asc(photos.sortOrder), desc(photos.id));
+  return clusterGroupSiblings(rows);
 }
 
 const getCachedPublicPhotos = cache(
