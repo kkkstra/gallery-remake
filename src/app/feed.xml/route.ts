@@ -1,4 +1,5 @@
 import { getAllPhotos, getSiteSettings } from "@/lib/queries";
+import { resolveSiteDescription, resolveSiteTitle } from "@/lib/site-branding";
 
 function escXml(str: string): string {
   return str
@@ -13,9 +14,8 @@ export async function GET(req: Request) {
   const [photos, settings] = await Promise.all([getAllPhotos(), getSiteSettings()]);
   const reqOrigin = new URL(req.url).origin;
   const baseUrl = (process.env.NEXT_PUBLIC_SITE_URL || settings.siteUrl || reqOrigin).replace(/\/$/, "");
-  const author = settings.photographerName || "林远";
-  const siteTitle = `${author} · 摄影作品集`;
-  const siteDesc = settings.tagline || "记录自然尺幅、城市暮色与行旅瞬间";
+  const siteTitle = resolveSiteTitle(settings);
+  const siteDesc = resolveSiteDescription(settings);
 
   const sorted = [...photos].sort(
     (a, b) => (b.takenAt || b.createdAt).localeCompare(a.takenAt || a.createdAt) || b.id - a.id

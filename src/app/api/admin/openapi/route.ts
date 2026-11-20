@@ -161,8 +161,11 @@ export async function GET(req: Request) {
         delete: { summary: "Delete gear item via ?id=" },
       },
       "/api/admin/settings": {
-        get: { summary: "Get all site & about page settings" },
+        get: { summary: "Get all site & about page settings (including siteTitle, siteDescription, faviconUrl, avatarUrl)" },
         put: { summary: "Update site & about page key-value settings" },
+      },
+      "/api/admin/asset": {
+        post: { summary: "Upload a brand asset (favicon or avatar) to R2/local storage without creating a gallery photo" },
       },
       "/api/admin/geocode": {
         get: { summary: "Geocode a place name via ?q=" },

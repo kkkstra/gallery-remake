@@ -2,6 +2,9 @@ import type { NewPhoto } from "./schema";
 
 export const INITIAL_SETTINGS: Record<string, string> = {
   initialized: "1",
+  siteTitle: "",
+  siteDescription: "",
+  faviconUrl: "",
   photographerName: "林远",
   photographerNameEn: "Lin Yuan",
   avatarUrl: "/samples/avatar.jpg",

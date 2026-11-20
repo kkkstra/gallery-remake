@@ -12,9 +12,11 @@ import {
   ChevronLeft,
   ChevronRight,
   Copy,
+  Crop,
   Eye,
   EyeOff,
   ExternalLink,
+  Globe,
   GripVertical,
   Images,
   KeyRound,
@@ -49,7 +51,13 @@ import {
 import type { AboutFocusItem, AboutMilestoneItem } from "./AboutClient";
 import { extractExifFromBuffer } from "@/lib/exif";
 import { AdminMapPicker } from "./AdminMapPicker";
+import { ImageCropModal } from "./ImageCropModal";
 import { optImg } from "@/lib/image-url";
+import {
+  buildAutoSiteTitle,
+  resolveFaviconUrl,
+  resolveSiteTitle,
+} from "@/lib/site-branding";
 import { CameraIllustration, LensIllustration } from "./GearIllustrations";
 import { usePreferences } from "./PreferencesProvider";
 
@@ -232,6 +240,13 @@ export function AdminClient({
     safeParseArray<AboutMilestoneItem>(initialSettings.aboutMilestonesJson)
   );
   const [settingsDirty, setSettingsDirty] = useState(false);
+  const [cropModal, setCropModal] = useState<{
+    mode: "avatar" | "favicon";
+    src: string;
+    revokeOnClose?: boolean;
+  } | null>(null);
+  const avatarFileRef = useRef<HTMLInputElement>(null);
+  const faviconFileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setPhotoList(initialPhotos);
@@ -879,6 +894,69 @@ export function AdminClient({
     router.refresh();
   };
 
+  const syncDocumentBranding = useCallback((next: Record<string, string>) => {
+    if (typeof document === "undefined") return;
+    document.title = resolveSiteTitle(next);
+    const href = resolveFaviconUrl(next);
+    let iconLink = document.querySelector<HTMLLinkElement>("link[rel='icon']");
+    if (!iconLink) {
+      iconLink = document.createElement("link");
+      iconLink.rel = "icon";
+      document.head.appendChild(iconLink);
+    }
+    iconLink.href = href;
+  }, []);
+
+  const closeCropModal = useCallback(() => {
+    setCropModal((prev) => {
+      if (prev?.revokeOnClose) URL.revokeObjectURL(prev.src);
+      return null;
+    });
+  }, []);
+
+  const openLocalFileCrop = (mode: "avatar" | "favicon", file?: File | null) => {
+    if (!file) return;
+    const objUrl = URL.createObjectURL(file);
+    setCropModal({ mode, src: objUrl, revokeOnClose: true });
+  };
+
+  const applyCroppedBrandImage = async (blob: Blob, filename: string) => {
+    if (!cropModal) return;
+    const fd = new FormData();
+    fd.append("file", new File([blob], filename, { type: blob.type }));
+    const upRes = await fetch("/api/admin/asset", { method: "POST", body: fd });
+    if (!upRes.ok) {
+      notify("图片上传失败，请重试");
+      return;
+    }
+    const { url } = (await upRes.json()) as { url: string };
+    const field = cropModal.mode === "favicon" ? "faviconUrl" : "avatarUrl";
+    const next = { ...settingsForm, [field]: url };
+    setSettingsForm(next);
+    await fetch("/api/admin/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ [field]: url }),
+    });
+    syncDocumentBranding(next);
+    closeCropModal();
+    notify(cropModal.mode === "favicon" ? "网站图标已裁剪并直接生效" : "头像已裁剪并直接生效");
+    router.refresh();
+  };
+
+  const resetDefaultFavicon = async () => {
+    const next = { ...settingsForm, faviconUrl: "" };
+    setSettingsForm(next);
+    await fetch("/api/admin/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ faviconUrl: "" }),
+    });
+    syncDocumentBranding(next);
+    notify("已恢复默认镜头网站图标");
+    router.refresh();
+  };
+
   const saveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
     await fetch("/api/admin/settings", {
@@ -890,6 +968,7 @@ export function AdminClient({
         aboutMilestonesJson: JSON.stringify(milestoneList),
       }),
     });
+    syncDocumentBranding(settingsForm);
     setSettingsDirty(false);
     notify("站点与关于页配置已保存");
     router.refresh();
@@ -3000,6 +3079,187 @@ export function AdminClient({
               </div>
             </section>
 
+            {/* Website Title, Favicon & Avatar Upload + Crop Studio */}
+            <section className="surface-card rounded-xl p-5 space-y-5">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="space-y-0.5">
+                  <h3 className="inline-flex items-center gap-1.5 text-sm font-semibold text-[var(--fg)]">
+                    <Globe className="h-4 w-4 text-emerald-500" />
+                    <span>网站标题、图标 (Favicon) 与头像设置</span>
+                  </h3>
+                  <p className="text-[var(--fg-muted)]">
+                    支持自定义浏览器标签页标题与 SEO 摘要；网站图标和摄影师头像可直接上传本地图片并交互式裁剪，确认即刻生效。
+                  </p>
+                </div>
+
+                {/* Live Browser Tab Preview Pill */}
+                <div className="inline-flex max-w-full items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-1.5 shadow-xs">
+                  <img
+                    src={resolveFaviconUrl(settingsForm)}
+                    alt=""
+                    className="h-4 w-4 shrink-0 object-contain"
+                  />
+                  <span className="truncate max-w-[260px] text-xs font-medium text-[var(--fg)]">
+                    {resolveSiteTitle(settingsForm)}
+                  </span>
+                </div>
+              </div>
+
+              {/* Site Title & Description */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                <label className="space-y-1 block">
+                  <span className="text-[var(--fg-muted)]">网站标题（浏览器标签页 Title，留空自动根据署名生成）</span>
+                  <input
+                    value={settingsForm.siteTitle || ""}
+                    onChange={(e) => {
+                      setSettingsForm({ ...settingsForm, siteTitle: e.target.value });
+                      setSettingsDirty(true);
+                    }}
+                    placeholder={buildAutoSiteTitle(settingsForm)}
+                    className={INPUT_CLS}
+                  />
+                </label>
+                <label className="space-y-1 block">
+                  <span className="text-[var(--fg-muted)]">网站描述（搜索引擎与社交分享摘要，留空默认使用一句话简介）</span>
+                  <input
+                    value={settingsForm.siteDescription || ""}
+                    onChange={(e) => {
+                      setSettingsForm({ ...settingsForm, siteDescription: e.target.value });
+                      setSettingsDirty(true);
+                    }}
+                    placeholder={settingsForm.tagline || "记录自然尺幅、城市暮色与行旅瞬间"}
+                    className={INPUT_CLS}
+                  />
+                </label>
+              </div>
+
+              {/* Direct Upload & Crop Cards: Favicon + Avatar */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
+                {/* Card A: Site Favicon */}
+                <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-subtle)]/50 p-4 space-y-3">
+                  <div className="flex items-center gap-3.5">
+                    <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl border border-[var(--border)] bg-[var(--bg)] p-2">
+                      <img
+                        src={resolveFaviconUrl(settingsForm)}
+                        alt="网站图标"
+                        className="h-full w-full object-contain"
+                      />
+                    </div>
+                    <div className="min-w-0 flex-1 space-y-1.5">
+                      <div className="font-semibold text-[var(--fg)]">网站图标 (Favicon / 主屏幕图标)</div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <input
+                          ref={faviconFileRef}
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={(e) => {
+                            openLocalFileCrop("favicon", e.target.files?.[0]);
+                            e.currentTarget.value = "";
+                          }}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => faviconFileRef.current?.click()}
+                          className="inline-flex items-center gap-1.5 rounded-md bg-[var(--fg)] px-3 py-1.5 font-medium text-[var(--bg)] hover:opacity-90 cursor-pointer"
+                        >
+                          <Upload className="h-3.5 w-3.5" />
+                          <span>上传并裁剪</span>
+                        </button>
+                        {settingsForm.faviconUrl && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setCropModal({ mode: "favicon", src: settingsForm.faviconUrl })
+                              }
+                              className="inline-flex items-center gap-1 rounded-md border border-[var(--border)] px-2.5 py-1.5 text-[var(--fg)] hover:bg-[var(--bg-subtle)] cursor-pointer"
+                            >
+                              <Crop className="h-3.5 w-3.5" />
+                              <span>重新裁剪</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={resetDefaultFavicon}
+                              className="rounded-md border border-[var(--border)] px-2.5 py-1.5 text-[var(--fg-muted)] hover:text-[var(--fg)] cursor-pointer"
+                            >
+                              恢复默认
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  <input
+                    value={settingsForm.faviconUrl || ""}
+                    onChange={(e) => {
+                      setSettingsForm({ ...settingsForm, faviconUrl: e.target.value });
+                      setSettingsDirty(true);
+                    }}
+                    placeholder="或直接填写图标图片 URL（留空使用内置极简镜头图标）"
+                    className={INPUT_CLS}
+                  />
+                </div>
+
+                {/* Card B: Photographer Avatar */}
+                <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-subtle)]/50 p-4 space-y-3">
+                  <div className="flex items-center gap-3.5">
+                    <img
+                      src={optImg(settingsForm.avatarUrl || "/samples/avatar.jpg", 256, 75)}
+                      decoding="async"
+                      alt="摄影师头像"
+                      className="h-14 w-14 shrink-0 rounded-full object-cover ring-1 ring-[var(--border)]"
+                    />
+                    <div className="min-w-0 flex-1 space-y-1.5">
+                      <div className="font-semibold text-[var(--fg)]">摄影师头像 (关于页与工作台)</div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <input
+                          ref={avatarFileRef}
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={(e) => {
+                            openLocalFileCrop("avatar", e.target.files?.[0]);
+                            e.currentTarget.value = "";
+                          }}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => avatarFileRef.current?.click()}
+                          className="inline-flex items-center gap-1.5 rounded-md bg-[var(--fg)] px-3 py-1.5 font-medium text-[var(--bg)] hover:opacity-90 cursor-pointer"
+                        >
+                          <Upload className="h-3.5 w-3.5" />
+                          <span>上传并裁剪</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setCropModal({
+                              mode: "avatar",
+                              src: settingsForm.avatarUrl || "/samples/avatar.jpg",
+                            })
+                          }
+                          className="inline-flex items-center gap-1 rounded-md border border-[var(--border)] px-2.5 py-1.5 text-[var(--fg)] hover:bg-[var(--bg-subtle)] cursor-pointer"
+                        >
+                          <Crop className="h-3.5 w-3.5" />
+                          <span>裁剪当前图</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                  <input
+                    value={settingsForm.avatarUrl || ""}
+                    onChange={(e) => {
+                      setSettingsForm({ ...settingsForm, avatarUrl: e.target.value });
+                      setSettingsDirty(true);
+                    }}
+                    placeholder="或直接填写头像图片 URL"
+                    className={INPUT_CLS}
+                  />
+                </div>
+              </div>
+            </section>
+
             {/* Basic Profile & Social Fields */}
             <section className="surface-card rounded-xl p-5 space-y-4">
               <h3 className="text-sm font-semibold text-[var(--fg)]">摄影师名片、域名与联系方式</h3>
@@ -3007,7 +3267,6 @@ export function AdminClient({
                 {[
                   ["photographerName", "摄影师署名 (中文)"],
                   ["photographerNameEn", "Photographer Name (EN)"],
-                  ["avatarUrl", "头像图片 URL"],
                   ["siteUrl", "站点域名 (RSS / Sitemap / 分享)"],
                   ["baseLocation", "常驻城市 (中文)"],
                   ["baseLocationEn", "Base Location (EN)"],
@@ -3235,6 +3494,16 @@ export function AdminClient({
             </div>
           </form>
         </main>
+      )}
+
+      {cropModal && (
+        <ImageCropModal
+          imageSrc={cropModal.src}
+          mode={cropModal.mode}
+          previewTitle={resolveSiteTitle(settingsForm)}
+          onCancel={closeCropModal}
+          onApply={applyCroppedBrandImage}
+        />
       )}
     </div>
   );

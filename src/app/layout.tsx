@@ -2,18 +2,50 @@ import type { Metadata, Viewport } from "next";
 import "@fontsource-variable/plus-jakarta-sans";
 import "./globals.css";
 import { getSiteSettings } from "@/lib/queries";
+import {
+  resolveFaviconUrl,
+  resolveSiteDescription,
+  resolveSiteTitle,
+} from "@/lib/site-branding";
 import { PreferencesProvider } from "@/components/PreferencesProvider";
 import { CommandPalette } from "@/components/CommandPalette";
 
-export const metadata: Metadata = {
-  title: "林远 · 个人摄影作品集 | Lin Yuan Photography",
-  description: "记录自然尺幅、城市暮色与行旅瞬间。",
-  alternates: {
-    types: {
-      "application/rss+xml": "/feed.xml",
+export async function generateMetadata(): Promise<Metadata> {
+  const settings = await getSiteSettings().catch(() => ({} as Record<string, string>));
+  const title = resolveSiteTitle(settings);
+  const description = resolveSiteDescription(settings);
+  const iconUrl = resolveFaviconUrl(settings);
+  const rawSiteUrl = (process.env.NEXT_PUBLIC_SITE_URL || settings.siteUrl || "").trim();
+  let metadataBase: URL | undefined;
+  if (rawSiteUrl) {
+    try {
+      metadataBase = new URL(rawSiteUrl);
+    } catch {
+      // ignore invalid URL
+    }
+  }
+
+  return {
+    metadataBase,
+    title,
+    description,
+    icons: {
+      icon: [{ url: iconUrl }],
+      shortcut: [iconUrl],
+      apple: [{ url: iconUrl }],
     },
-  },
-};
+    openGraph: {
+      title,
+      description,
+      siteName: title,
+    },
+    alternates: {
+      types: {
+        "application/rss+xml": "/feed.xml",
+      },
+    },
+  };
+}
 
 export const viewport: Viewport = {
   width: "device-width",
