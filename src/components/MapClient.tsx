@@ -19,13 +19,106 @@ interface MapClientProps {
   settings: Record<string, string>;
 }
 
-interface PlaceGroup {
-  id: string;
+type GeoPhoto = Photo & { lat: number; lng: number };
+
+interface CityGroup {
+  key: string;
   lat: number;
   lng: number;
   location: string;
   locationEn: string;
-  photos: (Photo & { lat: number; lng: number })[];
+  photos: GeoPhoto[];
+}
+
+interface MapPinGroup {
+  id: string;
+  cityKey: string | null; // non-null if all photos in this marker belong to the same city
+  lat: number;
+  lng: number;
+  location: string;
+  locationEn: string;
+  photos: GeoPhoto[];
+}
+
+type MapSelection =
+  | { kind: "city"; cityKey: string }
+  | { kind: "pin"; photoIds: number[] }
+  | null;
+
+const COUNTRY_OR_PROVINCE_RE =
+  /^(中国|中华人民共和国|日本|美国|英国|法国|德国|意大利|瑞士|冰岛|加拿大|新西兰|澳大利亚|韩国|新加坡|泰国|西班牙|挪威|瑞典|芬兰|奥地利|荷兰|葡萄牙|希腊|土耳其|埃及|摩洛哥|马来西亚|印度尼西亚|越南|尼泊尔|北海道|苏格兰|英格兰|.+省|.+自治区|广东|浙江|江苏|四川|云南|西藏|新疆|青海|甘肃|陕西|山东|山西|河南|河北|湖南|湖北|江西|安徽|福建|广西|海南|贵州|辽宁|吉林|黑龙江|内蒙古|宁夏|台湾)$/;
+
+const COUNTRY_ONLY_RE =
+  /^(中国|中华人民共和国|日本|美国|英国|法国|德国|意大利|瑞士|冰岛|加拿大|新西兰|澳大利亚|韩国|新加坡|泰国|西班牙|挪威|瑞典|芬兰|奥地利|荷兰|葡萄牙|希腊)$/;
+
+function normalizeZhCityToken(raw: string): string {
+  return raw
+    .trim()
+    .replace(/特别行政区$/, "")
+    .replace(/^(东京|京都|大阪)[都府]$/, "$1")
+    .replace(/^(.{2,})市$/, "$1");
+}
+
+function extractCityMeta(p: GeoPhoto): {
+  key: string | null;
+  cityZh: string;
+  countryZh: string;
+  hasSubSpot: boolean;
+  cleanEn: string;
+} {
+  const rawZh = (p.location || "").trim();
+  const rawEn = (p.locationEn || "").trim();
+
+  if (rawZh) {
+    const commaParts = rawZh.split(/\s*[,，]\s*/).filter(Boolean);
+    let cityPart = commaParts[0] || rawZh;
+    let countryZh = commaParts[1] || "";
+    if (commaParts.length >= 2 && COUNTRY_ONLY_RE.test(commaParts[0])) {
+      countryZh = commaParts[0];
+      cityPart = commaParts[1];
+    }
+
+    const hasCjk = /[\u4e00-\u9fff]/.test(cityPart);
+    const subParts = (
+      hasCjk ? cityPart.split(/\s*[·•｜|/\s-]+\s*/) : cityPart.split(/\s*[·•｜|/]\s*/)
+    ).filter(Boolean);
+
+    let chosen = subParts[0] || cityPart;
+    let hasSubSpot = subParts.length > 1;
+    if (subParts.length >= 2 && COUNTRY_OR_PROVINCE_RE.test(subParts[0])) {
+      if (!countryZh && COUNTRY_ONLY_RE.test(subParts[0])) countryZh = subParts[0];
+      chosen = subParts[1];
+      hasSubSpot = subParts.length > 2;
+    }
+
+    const cityZh = normalizeZhCityToken(chosen);
+    const enParts = rawEn.split(/\s*,\s*/).filter(Boolean);
+    const cleanEn =
+      enParts.length >= 3 ? enParts.slice(-2).join(", ") : rawEn;
+
+    return {
+      key: `city:${cityZh.toLowerCase()}`,
+      cityZh,
+      countryZh,
+      hasSubSpot,
+      cleanEn,
+    };
+  }
+
+  if (rawEn) {
+    const enParts = rawEn.split(/\s*,\s*/).filter(Boolean);
+    const cityEn = (enParts.length >= 3 ? enParts[enParts.length - 2] : enParts[0]).trim();
+    const cleanEn = enParts.length >= 3 ? enParts.slice(-2).join(", ") : rawEn;
+    return {
+      key: `city:${cityEn.toLowerCase()}`,
+      cityZh: cleanEn,
+      countryZh: "",
+      hasSubSpot: enParts.length >= 3,
+      cleanEn,
+    };
+  }
+
+  return { key: null, cityZh: "未知地点", countryZh: "", hasSubSpot: false, cleanEn: "Unknown" };
 }
 
 function formatCoord(lat: number, lng: number, detailed = false): string {
@@ -48,17 +141,112 @@ export function MapClient({ photos, collectionsMap, settings }: MapClientProps) 
   const qZoom = searchParams.get("z");
 
   const geoPhotos = useMemo(
-    () => photos.filter((p): p is Photo & { lat: number; lng: number } => p.lat !== null && p.lng !== null),
+    () => photos.filter((p): p is GeoPhoto => p.lat !== null && p.lng !== null),
     [photos]
   );
+
+  // 1. Invariant Sidebar City Directory — grouped strictly by city name, independent of map zoom
+  const { cityGroups, photoCityKeyMap } = useMemo(() => {
+    const byKey = new Map<
+      string,
+      {
+        key: string;
+        lat: number;
+        lng: number;
+        cityZh: string;
+        countryZh: string;
+        exactLabelZh: string;
+        cleanEn: string;
+        photos: GeoPhoto[];
+      }
+    >();
+    const unnamedGroups: typeof byKey extends Map<string, infer V> ? V[] : never = [];
+    const keyByPhotoId = new Map<number, string>();
+
+    for (const p of geoPhotos) {
+      const meta = extractCityMeta(p);
+      if (meta.key) {
+        let g = byKey.get(meta.key);
+        if (!g) {
+          g = {
+            key: meta.key,
+            lat: p.lat,
+            lng: p.lng,
+            cityZh: meta.cityZh,
+            countryZh: meta.countryZh,
+            exactLabelZh: !meta.hasSubSpot && p.location ? p.location.trim() : "",
+            cleanEn: meta.cleanEn,
+            photos: [p],
+          };
+          byKey.set(meta.key, g);
+        } else {
+          const n = g.photos.length;
+          g.lat = (g.lat * n + p.lat) / (n + 1);
+          g.lng = (g.lng * n + p.lng) / (n + 1);
+          if (!g.countryZh && meta.countryZh) g.countryZh = meta.countryZh;
+          if (!g.exactLabelZh && !meta.hasSubSpot && p.location) g.exactLabelZh = p.location.trim();
+          if (!g.cleanEn && meta.cleanEn) g.cleanEn = meta.cleanEn;
+          g.photos.push(p);
+        }
+        keyByPhotoId.set(p.id, meta.key);
+      } else {
+        // Unnamed GPS-only photos: group by ~28km city proximity
+        const near = unnamedGroups.find((u) => Math.hypot(u.lat - p.lat, u.lng - p.lng) < 0.25);
+        if (near) {
+          const n = near.photos.length;
+          near.lat = (near.lat * n + p.lat) / (n + 1);
+          near.lng = (near.lng * n + p.lng) / (n + 1);
+          near.photos.push(p);
+          keyByPhotoId.set(p.id, near.key);
+        } else {
+          const uKey = `gps:${p.id}`;
+          unnamedGroups.push({
+            key: uKey,
+            lat: p.lat,
+            lng: p.lng,
+            cityZh: "未知地点",
+            countryZh: "",
+            exactLabelZh: "",
+            cleanEn: "Unknown",
+            photos: [p],
+          });
+          keyByPhotoId.set(p.id, uKey);
+        }
+      }
+    }
+
+    const allRaw = [...byKey.values(), ...unnamedGroups];
+    const list: CityGroup[] = allRaw
+      .map((g) => {
+        const location =
+          g.exactLabelZh || (g.countryZh ? `${g.cityZh}, ${g.countryZh}` : g.cityZh);
+        const locationEn = g.cleanEn || location;
+        return {
+          key: g.key,
+          lat: g.lat,
+          lng: g.lng,
+          location,
+          locationEn,
+          photos: g.photos,
+        };
+      })
+      .sort((a, b) => b.photos.length - a.photos.length);
+
+    return { cityGroups: list, photoCityKeyMap: keyByPhotoId };
+  }, [geoPhotos]);
+
+  const cityByKey = useMemo(() => {
+    const m = new Map<string, CityGroup>();
+    for (const c of cityGroups) m.set(c.key, c);
+    return m;
+  }, [cityGroups]);
 
   const initialZoom = qZoom !== null ? Number(qZoom) : focusPhotoId > 0 ? 11.5 : 1.65;
   const [zoomBucket, setZoomBucket] = useState<number>(() => Math.round(initialZoom * 2) / 2);
 
-  // Dynamically uncluster from city -> district -> street-level spots as map zooms in
-  const places = useMemo<PlaceGroup[]>(() => {
+  // 2. Dynamic Map Canvas Pins — merges same-city pins at low zoom, unclusters into exact spots as you zoom in
+  const mapPins = useMemo<MapPinGroup[]>(() => {
     if (zoomBucket >= 12) {
-      // Street-level: every photo gets its own exact pin; subtly fan out identical tripod coordinates
       const coordCounts = new Map<string, number>();
       const coordIndex = new Map<string, number>();
       for (const p of geoPhotos) {
@@ -79,8 +267,10 @@ export function MapClient({ photos, collectionsMap, settings }: MapClientProps) 
           lat += Math.sin(angle) * offset;
           lng += Math.cos(angle) * offset;
         }
+        const cKey = photoCityKeyMap.get(p.id) || null;
         return {
           id: `p_${p.id}`,
+          cityKey: cKey,
           lat,
           lng,
           location: p.location || p.title,
@@ -91,85 +281,165 @@ export function MapClient({ photos, collectionsMap, settings }: MapClientProps) 
     }
 
     const radius = getClusterRadiusDeg(zoomBucket);
-    const groups: PlaceGroup[] = [];
+    const mergeSameCity = zoomBucket < 8.5;
+    const groups: MapPinGroup[] = [];
 
     for (const p of geoPhotos) {
-      const match = groups.find((g) => Math.hypot(g.lat - p.lat, g.lng - p.lng) < radius);
+      const pCityKey = photoCityKeyMap.get(p.id) || null;
+      const match = groups.find((g) => {
+        if (mergeSameCity && pCityKey && g.cityKey === pCityKey) {
+          // Merge same-city spots at overview zoom (guarding against cross-continent coordinate typos)
+          return Math.hypot(g.lat - p.lat, g.lng - p.lng) < 2.5;
+        }
+        return Math.hypot(g.lat - p.lat, g.lng - p.lng) < radius;
+      });
+
       if (match) {
         const n = match.photos.length;
         match.lat = (match.lat * n + p.lat) / (n + 1);
         match.lng = (match.lng * n + p.lng) / (n + 1);
+        if (match.cityKey !== pCityKey) match.cityKey = null;
         match.photos.push(p);
       } else {
+        const city = pCityKey ? cityByKey.get(pCityKey) : undefined;
         groups.push({
-          id: `g_${p.id}`,
+          id: `m_${p.id}`,
+          cityKey: pCityKey,
           lat: p.lat,
           lng: p.lng,
-          location: p.location || "未知地点",
-          locationEn: p.locationEn || p.location || "Unknown",
+          location: city?.location || p.location || "未知地点",
+          locationEn: city?.locationEn || p.locationEn || p.location || "Unknown",
           photos: [p],
         });
       }
     }
     return groups.sort((a, b) => b.photos.length - a.photos.length);
-  }, [geoPhotos, zoomBucket]);
+  }, [cityByKey, geoPhotos, photoCityKeyMap, zoomBucket]);
 
-  const [selectedPhotoId, setSelectedPhotoId] = useState<number | null>(
-    focusPhotoId > 0 ? focusPhotoId : null
-  );
+  const [selection, setSelection] = useState<MapSelection>(() => {
+    if (focusPhotoId > 0) return { kind: "pin", photoIds: [focusPhotoId] };
+    return null;
+  });
   const [lightboxList, setLightboxList] = useState<Photo[]>(geoPhotos);
   const [lightboxIdx, setLightboxIdx] = useState<number | null>(null);
 
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const markersRef = useRef<
-    Map<string, { marker: maplibregl.Marker; wrap: HTMLDivElement; btn: HTMLButtonElement }>
+    Map<string, { marker: maplibregl.Marker; wrap: HTMLDivElement; btn: HTMLButtonElement; photoIds: number[] }>
   >(new Map());
   const styleKeyRef = useRef("");
 
-  const selectedPlace = useMemo(() => {
-    if (selectedPhotoId === null) return null;
-    return places.find((g) => g.photos.some((p) => p.id === selectedPhotoId)) ?? null;
-  }, [places, selectedPhotoId]);
+  const activeDetail = useMemo(() => {
+    if (!selection) return null;
+    if (selection.kind === "city") {
+      const city = cityByKey.get(selection.cityKey);
+      if (!city) return null;
+      return {
+        location: city.location,
+        locationEn: city.locationEn,
+        lat: city.lat,
+        lng: city.lng,
+        photos: city.photos,
+        parentCity: null as CityGroup | null,
+        detailedCoord: false,
+      };
+    }
+    const idSet = new Set(selection.photoIds);
+    const matched = geoPhotos.filter((p) => idSet.has(p.id));
+    if (matched.length === 0) return null;
+    const first = matched[0];
+    const cKey = photoCityKeyMap.get(first.id);
+    const parentCity = cKey ? cityByKey.get(cKey) ?? null : null;
+    return {
+      location: first.location || parentCity?.location || first.title,
+      locationEn: first.locationEn || parentCity?.locationEn || first.titleEn || first.title,
+      lat: first.lat,
+      lng: first.lng,
+      photos: matched,
+      parentCity: parentCity && parentCity.photos.length > matched.length ? parentCity : null,
+      detailedCoord: true,
+    };
+  }, [cityByKey, geoPhotos, photoCityKeyMap, selection]);
 
-  const zoomToGroup = (group: PlaceGroup) => {
-    setSelectedPhotoId(group.photos[0]?.id ?? null);
+  const activePhotoIdSet = useMemo(
+    () => new Set(activeDetail ? activeDetail.photos.map((p) => p.id) : []),
+    [activeDetail]
+  );
+
+  const flyToPhotos = (list: GeoPhoto[], minSingleZoom = 11.5) => {
     const map = mapRef.current;
-    if (!map) return;
+    if (!map || list.length === 0) return;
 
     const curZ = map.getZoom();
-    if (group.photos.length > 1) {
-      let minLat = Infinity;
-      let maxLat = -Infinity;
-      let minLng = Infinity;
-      let maxLng = -Infinity;
-      for (const p of group.photos) {
-        if (p.lat < minLat) minLat = p.lat;
-        if (p.lat > maxLat) maxLat = p.lat;
-        if (p.lng < minLng) minLng = p.lng;
-        if (p.lng > maxLng) maxLng = p.lng;
-      }
-      const span = Math.max(maxLat - minLat, maxLng - minLng);
-      // Compute zoom needed so this cluster separates into sub-clusters / exact spots
-      const neededZoom =
-        span < 0.0003
-          ? 12.5
-          : Math.min(13, Math.max(curZ + 2.5, Math.log2(0.45 / (span * 0.65)) + 2.5));
-
+    if (list.length === 1) {
       map.flyTo({
-        center: [group.lng, group.lat],
-        zoom: neededZoom,
+        center: [list[0].lng, list[0].lat],
+        zoom: Math.max(curZ, minSingleZoom),
         duration: 820,
         essential: true,
       });
-    } else {
-      map.flyTo({
-        center: [group.lng, group.lat],
-        zoom: Math.max(curZ, 11.5),
-        duration: 820,
-        essential: true,
-      });
+      return;
     }
+
+    let minLat = Infinity;
+    let maxLat = -Infinity;
+    let minLng = Infinity;
+    let maxLng = -Infinity;
+    for (const p of list) {
+      if (p.lat < minLat) minLat = p.lat;
+      if (p.lat > maxLat) maxLat = p.lat;
+      if (p.lng < minLng) minLng = p.lng;
+      if (p.lng > maxLng) maxLng = p.lng;
+    }
+    const span = Math.max(maxLat - minLat, maxLng - minLng);
+    if (span < 0.0004) {
+      map.flyTo({
+        center: [(minLng + maxLng) / 2, (minLat + maxLat) / 2],
+        zoom: Math.max(curZ, 12.5),
+        duration: 820,
+        essential: true,
+      });
+      return;
+    }
+
+    map.fitBounds(
+      [
+        [minLng, minLat],
+        [maxLng, maxLat],
+      ],
+      { padding: 88, maxZoom: 13.5, duration: 850, essential: true }
+    );
+  };
+
+  const selectCityGroup = (city: CityGroup) => {
+    setSelection({ kind: "city", cityKey: city.key });
+    flyToPhotos(city.photos, 11.5);
+  };
+
+  const handlePinClick = (pin: MapPinGroup) => {
+    const map = mapRef.current;
+    const curZ = map?.getZoom() ?? zoomBucket;
+
+    if (pin.cityKey) {
+      const city = cityByKey.get(pin.cityKey);
+      if (city && (pin.photos.length === city.photos.length || city.photos.length === 1)) {
+        selectCityGroup(city);
+        return;
+      }
+    }
+
+    if (pin.photos.length > 1 && curZ < 11.5) {
+      // Multi-city overview cluster: zoom in to separate cities; if single city subset, focus its photos
+      flyToPhotos(pin.photos, 11.5);
+      if (pin.cityKey) {
+        setSelection({ kind: "city", cityKey: pin.cityKey });
+      }
+      return;
+    }
+
+    setSelection({ kind: "pin", photoIds: pin.photos.map((p) => p.id) });
+    flyToPhotos(pin.photos, 12);
   };
 
   // Initialize MapLibre GL with Chinese-compliant cartographic style
@@ -216,7 +486,7 @@ export function MapClient({ photos, collectionsMap, settings }: MapClientProps) 
       .catch(() => {});
 
     map.on("click", () => {
-      setSelectedPhotoId(null);
+      setSelection(null);
     });
 
     const syncZoom = () => {
@@ -265,13 +535,13 @@ export function MapClient({ photos, collectionsMap, settings }: MapClientProps) 
     markersRef.current.forEach(({ marker }) => marker.remove());
     markersRef.current.clear();
 
-    places.forEach((group) => {
-      const cover = group.photos[0];
+    mapPins.forEach((pin) => {
+      const cover = pin.photos[0];
       const wrap = document.createElement("div");
 
       const btn = document.createElement("button");
       btn.type = "button";
-      btn.setAttribute("aria-label", group.location);
+      btn.setAttribute("aria-label", pin.location);
       btn.style.cssText =
         "position:relative;display:block;width:40px;height:40px;padding:0;border-radius:4px;cursor:pointer;background:#14161d;transition:transform 200ms cubic-bezier(0.22,1,0.36,1),box-shadow 200ms ease;";
 
@@ -282,9 +552,9 @@ export function MapClient({ photos, collectionsMap, settings }: MapClientProps) 
         "width:100%;height:100%;object-fit:cover;border-radius:3px;display:block;pointer-events:none;";
       btn.appendChild(img);
 
-      if (group.photos.length > 1) {
+      if (pin.photos.length > 1) {
         const badge = document.createElement("span");
-        badge.textContent = String(group.photos.length);
+        badge.textContent = String(pin.photos.length);
         badge.style.cssText =
           "position:absolute;top:-6px;right:-6px;min-width:17px;height:17px;padding:0 4px;border-radius:999px;font-size:10px;font-weight:600;line-height:17px;text-align:center;background:#f4f5f7;color:#0a0b0e;box-shadow:0 2px 6px rgba(0,0,0,0.4);pointer-events:none;";
         btn.appendChild(badge);
@@ -292,26 +562,31 @@ export function MapClient({ photos, collectionsMap, settings }: MapClientProps) 
 
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
-        zoomToGroup(group);
+        handlePinClick(pin);
       });
 
       wrap.appendChild(btn);
 
       const marker = new maplibregl.Marker({ element: wrap, anchor: "center" })
-        .setLngLat([group.lng, group.lat])
+        .setLngLat([pin.lng, pin.lat])
         .addTo(map);
 
-      markersRef.current.set(group.id, { marker, wrap, btn });
+      markersRef.current.set(pin.id, {
+        marker,
+        wrap,
+        btn,
+        photoIds: pin.photos.map((p) => p.id),
+      });
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [places]);
+  }, [mapPins]);
 
   // Highlight active marker ring on inner `btn` (never overwriting `wrap.style.transform`!)
   useEffect(() => {
     const isDark = theme === "dark";
-    const activeGroupId = selectedPlace?.id ?? null;
-    markersRef.current.forEach(({ wrap, btn }, id) => {
-      const active = id === activeGroupId;
+    markersRef.current.forEach(({ wrap, btn, photoIds }) => {
+      const active =
+        activePhotoIdSet.size > 0 && photoIds.some((id) => activePhotoIdSet.has(id));
       wrap.style.zIndex = active ? "20" : "1";
       btn.style.transform = active ? "scale(1.18)" : "scale(1)";
       btn.style.boxShadow = active
@@ -322,10 +597,10 @@ export function MapClient({ photos, collectionsMap, settings }: MapClientProps) 
         ? "0 0 0 1.5px rgba(255,255,255,0.45), 0 6px 16px rgba(0,0,0,0.55)"
         : "0 0 0 1.5px rgba(255,255,255,0.95), 0 6px 16px rgba(15,23,42,0.2)";
     });
-  }, [places, selectedPlace, theme]);
+  }, [activePhotoIdSet, mapPins, theme]);
 
   const resetWorldView = () => {
-    setSelectedPhotoId(null);
+    setSelection(null);
     mapRef.current?.flyTo({
       center: [52, 30],
       zoom: 1.65,
@@ -338,8 +613,6 @@ export function MapClient({ photos, collectionsMap, settings }: MapClientProps) 
     setLightboxList(list);
     setLightboxIdx(Math.max(0, list.findIndex((p) => p.id === target.id)));
   };
-
-  const isDetailedZoom = zoomBucket >= 8;
 
   return (
     <div className="min-h-dvh flex flex-col">
@@ -386,44 +659,64 @@ export function MapClient({ photos, collectionsMap, settings }: MapClientProps) 
 
           {/* Flush Frosted Glass Side Panel */}
           <aside className="flex w-full lg:w-92 max-h-[38dvh] lg:max-h-none shrink-0 flex-col border-t lg:border-t-0 lg:border-l border-[var(--glass-border)] bg-[var(--glass-strong)] backdrop-blur-2xl backdrop-saturate-180">
-            {selectedPlace ? (
+            {activeDetail ? (
               <>
                 <div className="flex items-center justify-between gap-3 border-b border-[var(--border)] px-4 py-3 sm:px-6 sm:py-4">
                   <div className="min-w-0">
-                    <button
-                      type="button"
-                      onClick={resetWorldView}
-                      className="inline-flex items-center gap-1 text-xs text-[var(--fg-muted)] hover:text-[var(--fg)] transition cursor-pointer mb-1"
-                    >
-                      <ArrowLeft className="h-3.5 w-3.5" />
-                      <span>{locale === "en" ? "All Locations" : "全部地点"}</span>
-                    </button>
+                    <div className="flex items-center gap-2 mb-1">
+                      <button
+                        type="button"
+                        onClick={() => setSelection(null)}
+                        className="inline-flex items-center gap-1 text-xs text-[var(--fg-muted)] hover:text-[var(--fg)] transition cursor-pointer"
+                      >
+                        <ArrowLeft className="h-3.5 w-3.5" />
+                        <span>{locale === "en" ? "All Cities" : "全部地点"}</span>
+                      </button>
+                      {activeDetail.parentCity && (
+                        <>
+                          <span className="text-xs text-[var(--fg-subtle)]">·</span>
+                          <button
+                            type="button"
+                            onClick={() => selectCityGroup(activeDetail.parentCity!)}
+                            className="truncate text-xs text-[var(--fg-muted)] hover:text-[var(--fg)] transition cursor-pointer"
+                          >
+                            {pick(
+                              activeDetail.parentCity.location,
+                              activeDetail.parentCity.locationEn
+                            )}{" "}
+                            ({activeDetail.parentCity.photos.length})
+                          </button>
+                        </>
+                      )}
+                    </div>
                     <h2 className="truncate text-base font-semibold text-[var(--fg)]">
-                      {pick(selectedPlace.location, selectedPlace.locationEn)}
+                      {pick(activeDetail.location, activeDetail.locationEn)}
                     </h2>
                     <div className="inline-flex items-center gap-1 text-xs text-[var(--fg-subtle)]">
                       <Compass className="h-3 w-3" />
                       <span>
                         {formatCoord(
-                          selectedPlace.photos[0]?.lat ?? selectedPlace.lat,
-                          selectedPlace.photos[0]?.lng ?? selectedPlace.lng,
-                          true
+                          activeDetail.lat,
+                          activeDetail.lng,
+                          activeDetail.detailedCoord
                         )}
                       </span>
                     </div>
                   </div>
                   <span className="shrink-0 text-xs text-[var(--fg-muted)]">
-                    {selectedPlace.photos.length} {locale === "en" ? "photos" : "幅"}
+                    {activeDetail.photos.length} {locale === "en" ? "photos" : "幅"}
                   </span>
                 </div>
 
                 <div className="flex-1 overflow-y-auto px-4 py-3.5 sm:px-6 sm:py-5 space-y-4 sm:space-y-5">
-                  {selectedPlace.photos.map((photo) => {
+                  {activeDetail.photos.map((photo) => {
                     const pTitle = pick(photo.title, photo.titleEn);
+                    const pSpot = pick(photo.location, photo.locationEn);
+                    const cityTitle = pick(activeDetail.location, activeDetail.locationEn);
                     return (
                       <figure
                         key={photo.id}
-                        onClick={() => openPhotoLightbox(photo, selectedPlace.photos)}
+                        onClick={() => openPhotoLightbox(photo, activeDetail.photos)}
                         className="group cursor-pointer space-y-2"
                       >
                         <GalleryImage
@@ -436,7 +729,12 @@ export function MapClient({ photos, collectionsMap, settings }: MapClientProps) 
                           className="w-full"
                         />
                         <figcaption className="flex items-center justify-between gap-2 text-xs">
-                          <span className="truncate font-medium text-[var(--fg)]">{pTitle}</span>
+                          <div className="min-w-0 truncate">
+                            <span className="font-medium text-[var(--fg)]">{pTitle}</span>
+                            {pSpot && pSpot !== cityTitle && (
+                              <span className="ml-1.5 text-[var(--fg-subtle)]">· {pSpot}</span>
+                            )}
+                          </div>
                           <span className="inline-flex items-center gap-1 shrink-0 text-[var(--fg-muted)]">
                             <Aperture className="h-3 w-3 opacity-70" />
                             {[photo.focalMm ? `${photo.focalMm}mm` : "", photo.aperture]
@@ -454,8 +752,8 @@ export function MapClient({ photos, collectionsMap, settings }: MapClientProps) 
                 <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-3 sm:px-6 sm:py-4 text-sm">
                   <span className="font-semibold text-[var(--fg)]">
                     {locale === "en"
-                      ? `${places.length} ${isDetailedZoom ? "Spots" : "Locations"}`
-                      : `${places.length} 处${isDetailedZoom ? "机位" : "拍摄地"}`}
+                      ? `${cityGroups.length} Locations`
+                      : `${cityGroups.length} 处拍摄地`}
                   </span>
                   <span className="text-xs text-[var(--fg-muted)]">
                     {locale === "en" ? `${geoPhotos.length} Photos` : `共 ${geoPhotos.length} 幅`}
@@ -463,17 +761,13 @@ export function MapClient({ photos, collectionsMap, settings }: MapClientProps) 
                 </div>
 
                 <div className="flex-1 overflow-y-auto divide-y divide-[var(--border)]">
-                  {places.map((group) => {
-                    const cover = group.photos[0];
-                    const placeTitle =
-                      isDetailedZoom && group.photos.length === 1
-                        ? `${pick(cover.title, cover.titleEn)} · ${pick(group.location, group.locationEn)}`
-                        : pick(group.location, group.locationEn);
+                  {cityGroups.map((city) => {
+                    const cover = city.photos[0];
                     return (
                       <button
-                        key={group.id}
+                        key={city.key}
                         type="button"
-                        onClick={() => zoomToGroup(group)}
+                        onClick={() => selectCityGroup(city)}
                         className="group flex w-full items-center justify-between gap-3 px-4 py-3 sm:px-6 sm:py-3.5 text-left hover:bg-[var(--bg-subtle)] transition cursor-pointer"
                       >
                         <div className="flex items-center gap-3.5 min-w-0">
@@ -486,16 +780,16 @@ export function MapClient({ photos, collectionsMap, settings }: MapClientProps) 
                           </div>
                           <div className="min-w-0">
                             <div className="truncate text-sm font-medium text-[var(--fg)]">
-                              {placeTitle}
+                              {pick(city.location, city.locationEn)}
                             </div>
                             <div className="inline-flex items-center gap-1 text-xs text-[var(--fg-subtle)]">
                               <MapPin className="h-3 w-3 opacity-70" />
-                              <span>{formatCoord(cover.lat, cover.lng, isDetailedZoom)}</span>
+                              <span>{formatCoord(city.lat, city.lng)}</span>
                             </div>
                           </div>
                         </div>
                         <span className="shrink-0 text-xs text-[var(--fg-muted)]">
-                          {group.photos.length}
+                          {city.photos.length}
                         </span>
                       </button>
                     );
