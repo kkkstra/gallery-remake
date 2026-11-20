@@ -35,6 +35,9 @@ export async function POST(req: Request) {
   const category = String(form.get("category") || "landscape");
   const featured = form.get("featured") === "true";
   const hidden = form.get("hidden") === "true";
+  const groupId = String(form.get("groupId") || "").trim();
+  const groupOrder = Number(form.get("groupOrder") || 0);
+  const groupExpanded = form.get("groupExpanded") === "true";
   const collectionId = Number(form.get("collectionId") || 0);
   const customTitle = String(form.get("title") || "").trim();
   const titleEn = String(form.get("titleEn") || "").trim();
@@ -65,6 +68,9 @@ export async function POST(req: Request) {
       category,
       featured,
       hidden,
+      groupId,
+      groupOrder,
+      groupExpanded,
       sortOrder: 0,
       takenAt: String(form.get("takenAt") || "").trim() || exif.takenAt,
       location,

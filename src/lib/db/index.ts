@@ -36,7 +36,7 @@ export function ensureDb(): Promise<void> {
 async function bootstrapDb() {
   try {
     const marker = await client.execute(
-      "SELECT value FROM site_settings WHERE key = 'schema_v3' LIMIT 1"
+      "SELECT value FROM site_settings WHERE key = 'schema_v4' LIMIT 1"
     );
     if (marker.rows.length > 0) return;
   } catch {
@@ -58,6 +58,9 @@ async function bootstrapDb() {
       category TEXT NOT NULL DEFAULT 'landscape',
       featured INTEGER NOT NULL DEFAULT 0,
       hidden INTEGER NOT NULL DEFAULT 0,
+      group_id TEXT NOT NULL DEFAULT '',
+      group_order INTEGER NOT NULL DEFAULT 0,
+      group_expanded INTEGER NOT NULL DEFAULT 0,
       sort_order INTEGER NOT NULL DEFAULT 0,
       taken_at TEXT NOT NULL DEFAULT '',
       location TEXT NOT NULL DEFAULT '',
@@ -126,6 +129,21 @@ async function bootstrapDb() {
   } catch {
     // Column already exists
   }
+  try {
+    await client.execute("ALTER TABLE photos ADD COLUMN group_id TEXT NOT NULL DEFAULT ''");
+  } catch {
+    // Column already exists
+  }
+  try {
+    await client.execute("ALTER TABLE photos ADD COLUMN group_order INTEGER NOT NULL DEFAULT 0");
+  } catch {
+    // Column already exists
+  }
+  try {
+    await client.execute("ALTER TABLE photos ADD COLUMN group_expanded INTEGER NOT NULL DEFAULT 0");
+  } catch {
+    // Column already exists
+  }
 
   const initialized = await db
     .select()
@@ -175,7 +193,7 @@ async function bootstrapDb() {
     }
     await db
       .insert(schema.siteSettings)
-      .values({ key: "schema_v3", value: "1" })
+      .values({ key: "schema_v4", value: "1" })
       .onConflictDoUpdate({ target: schema.siteSettings.key, set: { value: "1" } });
     return;
   }
@@ -324,6 +342,6 @@ async function bootstrapDb() {
 
   await db
     .insert(schema.siteSettings)
-    .values({ key: "schema_v3", value: "1" })
+    .values({ key: "schema_v4", value: "1" })
     .onConflictDoUpdate({ target: schema.siteSettings.key, set: { value: "1" } });
 }

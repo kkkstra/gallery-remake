@@ -4,8 +4,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import * as maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
-import { Aperture, ArrowLeft, Compass, Globe2, MapPin, Minus, Plus } from "lucide-react";
+import { Aperture, ArrowLeft, Compass, Globe2, Layers, MapPin, Minus, Plus } from "lucide-react";
 import type { Photo } from "@/lib/db/schema";
+import { collapsePhotoListForDisplay } from "@/lib/photo-groups";
 import { SiteHeader } from "./SiteHeader";
 import { SiteFooter } from "./SiteFooter";
 import { Lightbox } from "./Lightbox";
@@ -711,42 +712,55 @@ export function MapClient({ photos, collectionsMap, settings }: MapClientProps) 
                 </div>
 
                 <div className="flex-1 overflow-y-auto px-4 py-3.5 sm:px-6 sm:py-5 space-y-4 sm:space-y-5">
-                  {activeDetail.photos.map((photo) => {
-                    const pTitle = pick(photo.title, photo.titleEn);
-                    const pSpot = pick(photo.location, photo.locationEn);
-                    const cityTitle = pick(activeDetail.location, activeDetail.locationEn);
-                    return (
-                      <figure
-                        key={photo.id}
-                        onClick={() => openPhotoLightbox(photo, activeDetail.photos)}
-                        className="group cursor-pointer space-y-2"
-                      >
-                        <GalleryImage
-                          photoId={photo.id}
-                          src={photo.url}
-                          alt={pTitle}
-                          ambient={photo.ambient}
-                          blurData={photo.blurData}
-                          aspectRatio={`${photo.width || 1600} / ${photo.height || 1068}`}
-                          className="w-full"
-                        />
-                        <figcaption className="flex items-center justify-between gap-2 text-xs">
-                          <div className="min-w-0 truncate">
-                            <span className="font-medium text-[var(--fg)]">{pTitle}</span>
-                            {pSpot && pSpot !== cityTitle && (
-                              <span className="ml-1.5 text-[var(--fg-subtle)]">· {pSpot}</span>
+                  {(() => {
+                    const { cards: detailCards, lightboxPhotos: detailLbPhotos } =
+                      collapsePhotoListForDisplay(activeDetail.photos, { alwaysStack: true });
+                    return detailCards.map((card) => {
+                      const { photo, groupTotal } = card;
+                      const pTitle = pick(photo.title, photo.titleEn);
+                      const pSpot = pick(photo.location, photo.locationEn);
+                      const cityTitle = pick(activeDetail.location, activeDetail.locationEn);
+                      return (
+                        <figure
+                          key={photo.id}
+                          onClick={() => openPhotoLightbox(photo, detailLbPhotos)}
+                          className="group cursor-pointer space-y-2"
+                        >
+                          <div className="relative">
+                            <GalleryImage
+                              photoId={photo.id}
+                              src={photo.url}
+                              alt={pTitle}
+                              ambient={photo.ambient}
+                              blurData={photo.blurData}
+                              aspectRatio={`${photo.width || 1600} / ${photo.height || 1068}`}
+                              className="w-full"
+                            />
+                            {groupTotal > 1 && (
+                              <span className="pointer-events-none absolute right-2.5 top-2.5 z-10 inline-flex items-center gap-1 rounded-full border border-white/20 bg-black/55 px-2 py-0.5 text-[11px] font-medium text-white backdrop-blur-md">
+                                <Layers className="h-3 w-3" />
+                                <span>{groupTotal}</span>
+                              </span>
                             )}
                           </div>
-                          <span className="inline-flex items-center gap-1 shrink-0 text-[var(--fg-muted)]">
-                            <Aperture className="h-3 w-3 opacity-70" />
-                            {[photo.focalMm ? `${photo.focalMm}mm` : "", photo.aperture]
-                              .filter(Boolean)
-                              .join(" ")}
-                          </span>
-                        </figcaption>
-                      </figure>
-                    );
-                  })}
+                          <figcaption className="flex items-center justify-between gap-2 text-xs">
+                            <div className="min-w-0 truncate">
+                              <span className="font-medium text-[var(--fg)]">{pTitle}</span>
+                              {pSpot && pSpot !== cityTitle && (
+                                <span className="ml-1.5 text-[var(--fg-subtle)]">· {pSpot}</span>
+                              )}
+                            </div>
+                            <span className="inline-flex items-center gap-1 shrink-0 text-[var(--fg-muted)]">
+                              <Aperture className="h-3 w-3 opacity-70" />
+                              {[photo.focalMm ? `${photo.focalMm}mm` : "", photo.aperture]
+                                .filter(Boolean)
+                                .join(" ")}
+                            </span>
+                          </figcaption>
+                        </figure>
+                      );
+                    });
+                  })()}
                 </div>
               </>
             ) : (

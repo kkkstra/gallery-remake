@@ -18,6 +18,7 @@ import {
   ExternalLink,
   Globe,
   GripVertical,
+  Home,
   Images,
   KeyRound,
   Layers,
@@ -37,11 +38,17 @@ import {
   Sun,
   Terminal,
   Trash2,
+  Unlink,
   Upload,
   X,
 } from "lucide-react";
 import type { GearItem, Photo } from "@/lib/db/schema";
 import type { CollectionWithPhotos } from "@/lib/queries";
+import {
+  buildGroupMap,
+  formatNumberedTitle,
+  generateGroupId,
+} from "@/lib/photo-groups";
 import {
   parseMonographBlocks,
   type CoverStyle,
@@ -50,6 +57,7 @@ import {
 } from "@/lib/monograph";
 import type { AboutFocusItem, AboutMilestoneItem } from "./AboutClient";
 import { extractExifFromBuffer } from "@/lib/exif";
+import { AdminHomepageTab } from "./AdminHomepageTab";
 import { AdminMapPicker } from "./AdminMapPicker";
 import { ImageCropModal } from "./ImageCropModal";
 import { optImg } from "@/lib/image-url";
@@ -154,7 +162,7 @@ export function AdminClient({
 
   const [password, setPassword] = useState("");
   const [loginErr, setLoginErr] = useState("");
-  const [tab, setTab] = useState<"photos" | "collections" | "gear" | "settings">("photos");
+  const [tab, setTab] = useState<"photos" | "homepage" | "collections" | "gear" | "settings">("photos");
   const [toast, setToast] = useState("");
 
   // Photo Library state
@@ -177,6 +185,13 @@ export function AdminClient({
   const [batchFeatured, setBatchFeatured] = useState(true);
   const [batchHidden, setBatchHidden] = useState(false);
   const [batchColId, setBatchColId] = useState("0");
+  const [batchAsGroup, setBatchAsGroup] = useState(false);
+  const [batchGroupMeta, setBatchGroupMeta] = useState({
+    title: "",
+    titleEn: "",
+    description: "",
+    expanded: false,
+  });
   const [showUploadMap, setShowUploadMap] = useState(false);
   const [batchGeo, setBatchGeo] = useState<{
     location: string;
@@ -301,18 +316,26 @@ export function AdminClient({
     return Array.from(s);
   }, [initialGear, photoList]);
 
+  const adminGroupMap = useMemo(() => buildGroupMap(photoList), [photoList]);
+  const groupSeriesCount = useMemo(
+    () => new Set(Array.from(adminGroupMap.values()).map((g) => g.groupId)).size,
+    [adminGroupMap]
+  );
+
   // Filtered photos in Library
   const filteredPhotos = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return photoList.filter((p) => {
       if (quickFilter === "featured" && !p.featured) return false;
       if (quickFilter === "hidden" && !p.hidden) return false;
+      if (quickFilter === "grouped" && !adminGroupMap.has(p.id)) return false;
       if (quickFilter === "nogps" && p.lat !== null && p.lng !== null) return false;
       if (quickFilter === "unassigned" && assignedPhotoIds.has(p.id)) return false;
       if (
         quickFilter !== "all" &&
         quickFilter !== "featured" &&
         quickFilter !== "hidden" &&
+        quickFilter !== "grouped" &&
         quickFilter !== "nogps" &&
         quickFilter !== "unassigned" &&
         p.category !== quickFilter
@@ -325,7 +348,7 @@ export function AdminClient({
         .toLowerCase()
         .includes(q);
     });
-  }, [assignedPhotoIds, photoList, quickFilter, searchQuery]);
+  }, [adminGroupMap, assignedPhotoIds, photoList, quickFilter, searchQuery]);
 
   const handleFiles = useCallback(
     async (files: FileList | File[]) => {
@@ -333,11 +356,22 @@ export function AdminClient({
       if (arr.length === 0) return;
       setUploadDrawerOpen(true);
       setUploading(true);
+
+      const isGroupedUpload = batchAsGroup && arr.length >= 2;
+      const sharedGroupId = isGroupedUpload ? generateGroupId() : "";
+      const fallbackGroupTitle = arr[0].name
+        .replace(/\.[^.]+$/, "")
+        .replace(/[-_]+/g, " ")
+        .replace(/\s+\d+$/, "")
+        .trim();
+      const groupBaseTitle = batchGroupMeta.title.trim() || fallbackGroupTitle || "未命名组图";
+
       let done = 0;
       for (const file of arr) {
         done += 1;
         setUploadProgress(`正在上传并解析 EXIF (${done}/${arr.length}) · ${file.name}`);
         const meta = await analyzeImageFile(file);
+        const frameFeatured = isGroupedUpload ? batchFeatured && done === 1 : batchFeatured;
 
         // When S3/R2 is active, try direct browser-to-R2 presigned PUT first (bypasses Vercel 4.5MB limit for 50MB+ photos!)
         let uploadedViaPresign = false;
@@ -367,15 +401,20 @@ export function AdminClient({
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({
-                    title: rawTitle || "未命名作品",
+                    title: isGroupedUpload ? groupBaseTitle : rawTitle || "未命名作品",
+                    titleEn: isGroupedUpload ? batchGroupMeta.titleEn.trim() : "",
+                    description: isGroupedUpload ? batchGroupMeta.description.trim() : "",
                     url: publicUrl,
                     width: exif.width || meta.width,
                     height: exif.height || meta.height,
                     ambient: meta.ambient,
                     blurData: meta.blurData,
                     category: batchCategory,
-                    featured: batchFeatured,
+                    featured: frameFeatured,
                     hidden: batchHidden,
+                    groupId: sharedGroupId,
+                    groupOrder: isGroupedUpload ? done : 0,
+                    groupExpanded: isGroupedUpload ? batchGroupMeta.expanded : false,
                     takenAt: exif.takenAt,
                     location: batchGeo.location,
                     locationEn: batchGeo.locationEn,
@@ -405,8 +444,16 @@ export function AdminClient({
           fd.append("height", String(meta.height));
           fd.append("ambient", meta.ambient);
           fd.append("category", batchCategory);
-          fd.append("featured", String(batchFeatured));
+          fd.append("featured", String(frameFeatured));
           fd.append("hidden", String(batchHidden));
+          if (isGroupedUpload) {
+            fd.append("title", groupBaseTitle);
+            if (batchGroupMeta.titleEn.trim()) fd.append("titleEn", batchGroupMeta.titleEn.trim());
+            if (batchGroupMeta.description.trim()) fd.append("description", batchGroupMeta.description.trim());
+            fd.append("groupId", sharedGroupId);
+            fd.append("groupOrder", String(done));
+            fd.append("groupExpanded", String(batchGroupMeta.expanded));
+          }
           if (batchGeo.location) fd.append("location", batchGeo.location);
           if (batchGeo.locationEn) fd.append("locationEn", batchGeo.locationEn);
           if (batchGeo.lat !== null) fd.append("lat", String(batchGeo.lat));
@@ -418,10 +465,21 @@ export function AdminClient({
       }
       setUploading(false);
       setUploadProgress("");
-      notify(`已成功上传 ${arr.length} 幅作品`);
+      notify(isGroupedUpload ? `已上传并生成组图（共 ${arr.length} 幅）` : `已成功上传 ${arr.length} 幅作品`);
       router.refresh();
     },
-    [batchCategory, batchColId, batchFeatured, batchGeo, batchHidden, notify, router, storageMode]
+    [
+      batchAsGroup,
+      batchCategory,
+      batchColId,
+      batchFeatured,
+      batchGeo,
+      batchGroupMeta,
+      batchHidden,
+      notify,
+      router,
+      storageMode,
+    ]
   );
 
   // Global window file drag-and-drop listener
@@ -542,14 +600,21 @@ export function AdminClient({
   const saveInspectorPhoto = async (advanceNext = false) => {
     if (!editingPhoto) return;
     setSavingPhoto(true);
-    await fetch(`/api/admin/photos/${editingPhoto.id}`, {
+    const res = await fetch(`/api/admin/photos/${editingPhoto.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ...editingPhoto, collectionIds: editingColIds }),
     });
-    setPhotoList((prev) => prev.map((p) => (p.id === editingPhoto.id ? editingPhoto : p)));
+    const data = await res.json().catch(() => ({}));
+    if (Array.isArray(data.groupPhotos) && data.groupPhotos.length > 0) {
+      const updatedMap = new Map<number, Photo>(data.groupPhotos.map((gp: Photo) => [gp.id, gp]));
+      setPhotoList((prev) => prev.map((p) => updatedMap.get(p.id) ?? p));
+      if (data.photo) setEditingPhoto(data.photo);
+    } else {
+      setPhotoList((prev) => prev.map((p) => (p.id === editingPhoto.id ? data.photo ?? editingPhoto : p)));
+    }
     setSavingPhoto(false);
-    notify("已保存作品修改");
+    notify(editingPhoto.groupId ? "已同步保存整组作品信息" : "已保存作品修改");
     router.refresh();
     if (advanceNext) stepInspector(1);
   };
@@ -656,7 +721,14 @@ export function AdminClient({
   };
 
   const runBatchAction = async (
-    action: "category" | "featured" | "hidden" | "collection" | "delete",
+    action:
+      | "category"
+      | "featured"
+      | "hidden"
+      | "collection"
+      | "delete"
+      | "group_merge"
+      | "group_ungroup",
     value?: string | boolean | number
   ) => {
     if (selectedIds.length === 0) return;
@@ -666,11 +738,90 @@ export function AdminClient({
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ids: selectedIds, action, value }),
     });
-    if (res.ok) {
-      if (action === "delete") setSelectedIds([]);
-      notify(`已批量处理 ${selectedIds.length} 幅作品`);
-      router.refresh();
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      notify(data.error || "批量操作失败");
+      return;
     }
+    if (action === "delete" || action === "group_merge" || action === "group_ungroup") {
+      setSelectedIds([]);
+    }
+    if (action === "group_merge") {
+      const freshRes = await fetch("/api/admin/photos");
+      if (freshRes.ok) {
+        const freshData = await freshRes.json();
+        if (Array.isArray(freshData.photos)) {
+          setPhotoList(freshData.photos);
+          const firstMerged = freshData.photos.find(
+            (p: Photo) => p.groupId === data.groupId && p.groupOrder === 1
+          );
+          if (firstMerged) selectInspectorPhoto(firstMerged);
+        }
+      }
+      notify(`已合并为组图（共 ${data.count} 幅，共用第 1 幅标题与地点）`);
+    } else if (action === "group_ungroup") {
+      const freshRes = await fetch("/api/admin/photos");
+      if (freshRes.ok) {
+        const freshData = await freshRes.json();
+        if (Array.isArray(freshData.photos)) setPhotoList(freshData.photos);
+      }
+      if (editingPhoto) setEditingPhoto({ ...editingPhoto, groupId: "", groupOrder: 0, groupExpanded: false });
+      notify("已解散所选组图");
+    } else {
+      notify(`已批量处理 ${selectedIds.length} 幅作品`);
+    }
+    router.refresh();
+  };
+
+  const refreshAdminPhotos = async (focusPhotoId?: number) => {
+    const r = await fetch("/api/admin/photos");
+    if (!r.ok) return;
+    const d = await r.json();
+    if (Array.isArray(d.photos)) {
+      setPhotoList(d.photos);
+      const nextFocusId = focusPhotoId ?? editingPhoto?.id;
+      if (nextFocusId) {
+        const found = d.photos.find((p: Photo) => p.id === nextFocusId);
+        if (found) setEditingPhoto({ ...found });
+      }
+    }
+    router.refresh();
+  };
+
+  const reorderGroupFrame = async (siblings: Photo[], currId: number, dir: -1 | 1) => {
+    const idx = siblings.findIndex((s) => s.id === currId);
+    const nextIdx = idx + dir;
+    if (idx < 0 || nextIdx < 0 || nextIdx >= siblings.length) return;
+    const reordered = [...siblings];
+    [reordered[idx], reordered[nextIdx]] = [reordered[nextIdx], reordered[idx]];
+    await fetch("/api/admin/photos", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "group_reorder", ids: reordered.map((s) => s.id) }),
+    });
+    await refreshAdminPhotos(currId);
+    notify("组内顺序已调整");
+  };
+
+  const detachFrameFromGroup = async (photoId: number) => {
+    await fetch("/api/admin/photos", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "group_remove", ids: [photoId] }),
+    });
+    await refreshAdminPhotos(photoId);
+    notify("已将该照片移出组图");
+  };
+
+  const dissolveGroup = async (groupId: string) => {
+    if (!confirm("确认解散该组图？解散后各张照片仍保留当前标题、地点与描述。")) return;
+    await fetch("/api/admin/photos", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "group_ungroup", groupId }),
+    });
+    await refreshAdminPhotos(editingPhoto?.id);
+    notify("已解散组图");
   };
 
   // Series & Monograph handlers
@@ -860,32 +1011,37 @@ export function AdminClient({
 
   const syncGearFromExif = async () => {
     setSyncingGear(true);
-    const existingNames = new Set(initialGear.map((g) => g.name.toLowerCase()));
-    const toCreate: { type: "camera" | "lens"; brand: string; name: string }[] = [];
-
-    for (const p of photoList) {
-      if (p.camera && !existingNames.has(p.camera.toLowerCase())) {
-        existingNames.add(p.camera.toLowerCase());
-        const brand = p.camera.trim().split(/\s+/)[0] || "";
-        toCreate.push({ type: "camera", brand, name: p.camera });
-      }
-      if (p.lens && !existingNames.has(p.lens.toLowerCase())) {
-        existingNames.add(p.lens.toLowerCase());
-        const brand = p.camera ? p.camera.trim().split(/\s+/)[0] : "";
-        toCreate.push({ type: "lens", brand, name: p.lens });
-      }
-    }
-
-    for (const item of toCreate) {
-      await fetch("/api/admin/gear", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(item),
-      });
-    }
+    const res = await fetch("/api/admin/gear", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "sync_from_exif" }),
+    });
+    const data = res.ok
+      ? ((await res.json()) as { importedCount?: number; createdCount?: number })
+      : {};
     setSyncingGear(false);
-    notify(toCreate.length > 0 ? `已从 EXIF 自动导入 ${toCreate.length} 款新器材` : "当前所有照片器材均已在库中");
-    if (toCreate.length > 0) router.refresh();
+    const count = data.importedCount ?? data.createdCount ?? 0;
+    notify(count > 0 ? `已从 EXIF 自动导入 ${count} 款新器材` : "当前所有照片器材均已在库中");
+    if (count > 0) router.refresh();
+  };
+
+  const moveGearItem = async (id: number, dir: -1 | 1, typeItems: (GearItem & { photoCount: number })[]) => {
+    const idx = typeItems.findIndex((g) => g.id === id);
+    const swapIdx = idx + dir;
+    if (idx < 0 || swapIdx < 0 || swapIdx >= typeItems.length) return;
+    const reordered = [...typeItems];
+    [reordered[idx], reordered[swapIdx]] = [reordered[swapIdx], reordered[idx]];
+    const otherIds = initialGear.filter((g) => g.type !== typeItems[0]?.type).map((g) => g.id);
+    const orderedIds =
+      typeItems[0]?.type === "camera"
+        ? [...reordered.map((g) => g.id), ...otherIds]
+        : [...otherIds, ...reordered.map((g) => g.id)];
+    await fetch("/api/admin/gear", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ orderedIds }),
+    });
+    router.refresh();
   };
 
   const removeGearItem = async (id: number) => {
@@ -1060,6 +1216,7 @@ export function AdminClient({
               {(
                 [
                   ["photos", Images, "作品库", photoList.length],
+                  ["homepage", Home, "首页编排", null],
                   ["collections", Layers, "专题画册", colList.length],
                   ["gear", Camera, "器材档案", initialGear.length],
                   ["settings", Settings, "站点与关于", null],
@@ -1088,11 +1245,12 @@ export function AdminClient({
             </nav>
           </div>
 
-          {/* Mobile Dedicated Full-Width 4-Tab Bar */}
-          <nav className="grid sm:hidden grid-cols-4 gap-1 rounded-lg bg-[var(--bg-subtle)] p-1 text-xs">
+          {/* Mobile Dedicated Full-Width 5-Tab Bar */}
+          <nav className="grid sm:hidden grid-cols-5 gap-1 rounded-lg bg-[var(--bg-subtle)] p-1 text-xs">
             {(
               [
                 ["photos", Images, "作品", photoList.length],
+                ["homepage", Home, "首页", null],
                 ["collections", Layers, "画册", colList.length],
                 ["gear", Camera, "器材", initialGear.length],
                 ["settings", Settings, "设置", null],
@@ -1190,6 +1348,9 @@ export function AdminClient({
                   [
                     ["all", `全部 ${photoList.length}`],
                     ["featured", `★ 精选 ${featuredCount}`],
+                    ...(groupSeriesCount > 0 || quickFilter === "grouped"
+                      ? [["grouped", `组图 ${groupSeriesCount}`]]
+                      : []),
                     ...(hiddenCount > 0 || quickFilter === "hidden" ? [["hidden", `已隐藏 ${hiddenCount}`]] : []),
                     ...(noGpsCount > 0 ? [["nogps", `缺定位 ${noGpsCount}`]] : []),
                     ...(unassignedCount > 0 ? [["unassigned", `未入集 ${unassignedCount}`]] : []),
@@ -1329,6 +1490,17 @@ export function AdminClient({
                     />
                     <span>上传后先隐藏</span>
                   </label>
+                  {uploadSubTab === "file" && (
+                    <label className="inline-flex items-center gap-1.5 cursor-pointer rounded-md border border-[var(--border)] bg-[var(--bg-subtle)] px-2.5 py-1 text-[var(--fg)] font-medium">
+                      <input
+                        type="checkbox"
+                        checked={batchAsGroup}
+                        onChange={(e) => setBatchAsGroup(e.target.checked)}
+                      />
+                      <Layers className="h-3.5 w-3.5 opacity-80" />
+                      <span>合并为组图</span>
+                    </label>
+                  )}
                   <button
                     type="button"
                     onClick={() => setShowUploadMap((v) => !v)}
@@ -1411,6 +1583,53 @@ export function AdminClient({
                       }
                     }}
                   />
+                </div>
+              )}
+
+              {uploadSubTab === "file" && batchAsGroup && (
+                <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-subtle)]/75 p-3 space-y-2.5 animate-tab-in">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="inline-flex items-center gap-1.5 font-medium text-[var(--fg)]">
+                      <Layers className="h-3.5 w-3.5 opacity-85" />
+                      一次拖入 2 张以上同地点照片，自动按 1、2、3 编号成组并共享以下信息
+                    </span>
+                    <label className="inline-flex items-center gap-1.5 text-[var(--fg-muted)] cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={batchGroupMeta.expanded}
+                        onChange={(e) =>
+                          setBatchGroupMeta({ ...batchGroupMeta, expanded: e.target.checked })
+                        }
+                      />
+                      <span>相册默认平铺展开（不叠卡）</span>
+                    </label>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    <input
+                      placeholder="组图中文主标题 (如 八坂暮色，留空默认取首张文件名)"
+                      value={batchGroupMeta.title}
+                      onChange={(e) =>
+                        setBatchGroupMeta({ ...batchGroupMeta, title: e.target.value })
+                      }
+                      className={INPUT_CLS}
+                    />
+                    <input
+                      placeholder="英文主标题 Title (EN，选填)"
+                      value={batchGroupMeta.titleEn}
+                      onChange={(e) =>
+                        setBatchGroupMeta({ ...batchGroupMeta, titleEn: e.target.value })
+                      }
+                      className={INPUT_CLS}
+                    />
+                    <input
+                      placeholder="组图共用说明 (选填)"
+                      value={batchGroupMeta.description}
+                      onChange={(e) =>
+                        setBatchGroupMeta({ ...batchGroupMeta, description: e.target.value })
+                      }
+                      className={INPUT_CLS}
+                    />
+                  </div>
                 </div>
               )}
 
@@ -1498,6 +1717,8 @@ export function AdminClient({
                     const realIdx = photoList.findIndex((p) => p.id === photo.id);
                     const checked = selectedIds.includes(photo.id);
                     const inspecting = editingPhoto?.id === photo.id;
+                    const gInfo = adminGroupMap.get(photo.id);
+                    const displayTitle = formatNumberedTitle(photo.title, gInfo);
                     return (
                       <div
                         key={photo.id}
@@ -1537,6 +1758,12 @@ export function AdminClient({
                           {photo.hidden && (
                             <span className="pointer-events-none absolute bottom-2 left-2 rounded bg-zinc-950/80 px-1.5 py-0.5 text-[10px] font-medium text-zinc-200 backdrop-blur-sm">
                               已隐藏
+                            </span>
+                          )}
+                          {gInfo && (
+                            <span className="pointer-events-none absolute bottom-2 right-2 inline-flex items-center gap-1 rounded bg-black/65 px-1.5 py-0.5 text-[10px] font-medium text-white backdrop-blur-sm">
+                              <Layers className="h-2.5 w-2.5" />
+                              {gInfo.index}/{gInfo.total}
                             </span>
                           )}
                           {/* Top-Left Checkbox (Always reachable on touch screens) */}
@@ -1589,7 +1816,7 @@ export function AdminClient({
 
                         <div className="p-2.5 space-y-1 text-xs">
                           <div className="flex items-center justify-between gap-1.5">
-                            <span className="truncate font-medium text-[var(--fg)]">{photo.title}</span>
+                            <span className="truncate font-medium text-[var(--fg)]">{displayTitle}</span>
                             {photo.lat !== null && (
                               <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400" title="含 GPS 坐标" />
                             )}
@@ -1610,6 +1837,8 @@ export function AdminClient({
                     const realIdx = photoList.findIndex((p) => p.id === photo.id);
                     const checked = selectedIds.includes(photo.id);
                     const inspecting = editingPhoto?.id === photo.id;
+                    const gInfo = adminGroupMap.get(photo.id);
+                    const displayTitle = formatNumberedTitle(photo.title, gInfo);
                     return (
                       <div
                         key={photo.id}
@@ -1655,7 +1884,13 @@ export function AdminClient({
                           />
                           <div className="min-w-0">
                             <div className="flex items-center gap-1.5">
-                              <span className="truncate font-medium text-sm text-[var(--fg)]">{photo.title}</span>
+                              <span className="truncate font-medium text-sm text-[var(--fg)]">{displayTitle}</span>
+                              {gInfo && (
+                                <span className="shrink-0 inline-flex items-center gap-0.5 rounded bg-[var(--bg-subtle)] border border-[var(--border)] px-1.5 py-0.5 text-[10px] text-[var(--fg)]">
+                                  <Layers className="h-2.5 w-2.5" />
+                                  {gInfo.index}/{gInfo.total}
+                                </span>
+                              )}
                               {photo.hidden && (
                                 <span className="shrink-0 rounded bg-rose-500/15 px-1.5 py-0.5 text-[10px] text-rose-400">
                                   已隐藏
@@ -1848,9 +2083,111 @@ export function AdminClient({
 
                   {/* Fields */}
                   <div className="space-y-3 flex-1 min-h-0 lg:max-h-[56dvh] overflow-y-auto overscroll-contain pr-0.5">
+                  {(() => {
+                    const inspGroup = adminGroupMap.get(editingPhoto.id);
+                    if (!inspGroup) return null;
+                    return (
+                      <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-subtle)] p-2.5 space-y-2.5">
+                        <div className="flex flex-wrap items-center justify-between gap-1.5">
+                          <span className="inline-flex items-center gap-1.5 font-semibold text-[var(--fg)]">
+                            <Layers className="h-3.5 w-3.5 opacity-85" />
+                            组图 · 第 {inspGroup.index} / {inspGroup.total} 幅
+                          </span>
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              disabled={inspGroup.index <= 1}
+                              onClick={() =>
+                                reorderGroupFrame(inspGroup.siblings, editingPhoto.id, -1)
+                              }
+                              title="在组内向前移一位（第 1 幅为封面）"
+                              className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[11px] text-[var(--fg-muted)] hover:text-[var(--fg)] disabled:opacity-30 cursor-pointer"
+                            >
+                              ← 前移
+                            </button>
+                            <button
+                              type="button"
+                              disabled={inspGroup.index >= inspGroup.total}
+                              onClick={() =>
+                                reorderGroupFrame(inspGroup.siblings, editingPhoto.id, 1)
+                              }
+                              title="在组内向后移一位"
+                              className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[11px] text-[var(--fg-muted)] hover:text-[var(--fg)] disabled:opacity-30 cursor-pointer"
+                            >
+                              后移 →
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
+                          {inspGroup.siblings.map((sib, sIdx) => {
+                            const active = sib.id === editingPhoto.id;
+                            return (
+                              <button
+                                key={sib.id}
+                                type="button"
+                                onClick={() => selectInspectorPhoto(sib)}
+                                className={`relative h-11 w-16 shrink-0 overflow-hidden rounded-xs transition cursor-pointer ${
+                                  active
+                                    ? "ring-2 ring-[var(--fg)] opacity-100"
+                                    : "opacity-55 hover:opacity-95 ring-1 ring-[var(--border)]"
+                                }`}
+                              >
+                                <img
+                                  src={optImg(sib.url, 128, 75)}
+                                  loading="lazy"
+                                  decoding="async"
+                                  alt=""
+                                  className="h-full w-full object-cover"
+                                />
+                                <span className="absolute left-1 bottom-0.5 rounded bg-black/70 px-1 text-[10px] font-semibold leading-tight text-white">
+                                  {sIdx + 1}
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
+
+                        <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5 border-t border-[var(--border)]">
+                          <label className="inline-flex items-center gap-1.5 text-[11px] text-[var(--fg)] cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={Boolean(editingPhoto.groupExpanded)}
+                              onChange={(e) =>
+                                setEditingPhoto({
+                                  ...editingPhoto,
+                                  groupExpanded: e.target.checked,
+                                })
+                              }
+                            />
+                            <span>相册默认平铺展开</span>
+                          </label>
+                          <div className="flex items-center gap-2 text-[11px]">
+                            <button
+                              type="button"
+                              onClick={() => detachFrameFromGroup(editingPhoto.id)}
+                              className="inline-flex items-center gap-1 text-[var(--fg-muted)] hover:text-[var(--fg)] cursor-pointer"
+                            >
+                              <Unlink className="h-3 w-3" /> 移出本张
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => dissolveGroup(inspGroup.groupId)}
+                              className="text-rose-400 hover:underline cursor-pointer"
+                            >
+                              解散整组
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
+
                   <div className="grid grid-cols-2 gap-2">
                     <label className="space-y-1">
-                      <span className="text-[var(--fg-muted)]">中文标题</span>
+                      <span className="text-[var(--fg-muted)]">
+                        {adminGroupMap.has(editingPhoto.id) ? "组图共用主标题" : "中文标题"}
+                      </span>
                       <input
                         value={editingPhoto.title}
                         onChange={(e) => setEditingPhoto({ ...editingPhoto, title: e.target.value })}
@@ -2155,6 +2492,34 @@ export function AdminClient({
                 </button>
 
                 <span className="h-4 w-[1px] bg-[var(--border)]" />
+
+                {(selectedIds.length >= 2 ||
+                  selectedIds.some((id) => Boolean(adminGroupMap.get(id)))) && (
+                  <button
+                    type="button"
+                    disabled={
+                      selectedIds.length < 2 &&
+                      !selectedIds.some((id) => Boolean(adminGroupMap.get(id)))
+                    }
+                    onClick={() => runBatchAction("group_merge")}
+                    title="按选择顺序合并为组图，自动继承第 1 幅作品的标题、描述与地点并编号 1、2、3"
+                    className="inline-flex items-center gap-1 rounded bg-[var(--fg)] px-2.5 py-1 font-medium text-[var(--bg)] hover:opacity-90 cursor-pointer"
+                  >
+                    <Layers className="h-3.5 w-3.5" />
+                    <span>合并为组图</span>
+                  </button>
+                )}
+
+                {selectedIds.some((id) => Boolean(adminGroupMap.get(id))) && (
+                  <button
+                    type="button"
+                    onClick={() => runBatchAction("group_ungroup")}
+                    className="inline-flex items-center gap-1 rounded border border-[var(--border)] px-2.5 py-1 text-[var(--fg-muted)] hover:text-[var(--fg)] cursor-pointer"
+                  >
+                    <Unlink className="h-3.5 w-3.5" />
+                    <span>解散组图</span>
+                  </button>
+                )}
 
                 <select
                   defaultValue=""
@@ -2868,7 +3233,7 @@ export function AdminClient({
                   {gType === "camera" ? `相机机身 (${items.length})` : `光学镜头 (${items.length})`}
                 </h3>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
-                  {items.map((g) => (
+                  {items.map((g, gIdx) => (
                     <div
                       key={g.id}
                       className="surface-card flex items-center justify-between gap-3 rounded-xl p-4"
@@ -2893,6 +3258,22 @@ export function AdminClient({
                       <div className="flex items-center gap-1 shrink-0">
                         <button
                           type="button"
+                          disabled={gIdx === 0}
+                          onClick={() => moveGearItem(g.id, -1, items)}
+                          className="rounded border border-[var(--border)] p-1 text-[var(--fg-muted)] hover:text-[var(--fg)] disabled:opacity-25 cursor-pointer"
+                        >
+                          <ChevronLeft className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          disabled={gIdx === items.length - 1}
+                          onClick={() => moveGearItem(g.id, 1, items)}
+                          className="rounded border border-[var(--border)] p-1 text-[var(--fg-muted)] hover:text-[var(--fg)] disabled:opacity-25 cursor-pointer"
+                        >
+                          <ChevronRight className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          type="button"
                           onClick={() => setEditingGear({ ...g })}
                           className="rounded border border-[var(--border)] p-1.5 text-[var(--fg-muted)] hover:text-[var(--fg)] cursor-pointer"
                         >
@@ -2913,6 +3294,20 @@ export function AdminClient({
             );
           })}
         </main>
+      )}
+
+      {/* ==================== TAB: HOMEPAGE CURATION WORKBENCH ==================== */}
+      {tab === "homepage" && (
+        <AdminHomepageTab
+          photos={photoList}
+          collections={colList}
+          settings={settingsForm}
+          onSaved={(patch, msg) => {
+            setSettingsForm((prev) => ({ ...prev, ...patch }));
+            notify(msg);
+            router.refresh();
+          }}
+        />
       )}
 
       {/* ==================== TAB 4: SITE & ABOUT VISUAL CONFIGURATOR ==================== */}
@@ -3060,21 +3455,19 @@ export function AdminClient({
                 </div>
               </div>
 
-              <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-subtle)]/70 p-3 font-mono text-[11px] leading-relaxed text-[var(--fg-muted)] overflow-x-auto">
-                <div># 1. Agent 自动发现全部接口结构：GET /api/admin/openapi</div>
+              <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-subtle)]/70 p-3 font-mono text-[11px] leading-relaxed text-[var(--fg-muted)] overflow-x-auto space-y-0.5">
+                <div># 1. Agent 自发现完整 OpenAPI 3.1 规范（100% 覆盖后台所有管理能力）：GET /api/admin/openapi</div>
                 <div>
-                  curl -H &quot;Authorization: Bearer {settingsForm.apiKey || "$API_KEY"}&quot;{" "}
-                  {(settingsForm.siteUrl || "http://localhost:3000").replace(/\/$/, "")}/api/admin/photos
+                  curl {(settingsForm.siteUrl || "http://localhost:3000").replace(/\/$/, "")}/api/admin/openapi
                 </div>
+                <div># 2. 自定义首页精选轮播、影集与相册展示列表及顺序：PUT /api/admin/homepage</div>
                 <div>
-                  # 2. CLI 直接上传原图并写入坐标/分类：POST /api/admin/upload
+                  curl -X PUT -H &quot;Authorization: Bearer {settingsForm.apiKey || "$API_KEY"}&quot; -H &quot;Content-Type: application/json&quot; -d &apos;&#123;&quot;featuredIds&quot;:[3,1,5],&quot;collectionIds&quot;:[2,1],&quot;galleryIds&quot;:[8,4,2]&#125;&apos;{" "}
+                  {(settingsForm.siteUrl || "http://localhost:3000").replace(/\/$/, "")}/api/admin/homepage
                 </div>
+                <div># 3. 上传原图 / 合并组图 / 服务端裁剪网站图标与头像 / 器材与站点配置：</div>
                 <div>
-                  curl -X POST -H &quot;X-API-Key: {settingsForm.apiKey || "$API_KEY"}&quot; -F &quot;file=@photo.jpg&quot; -F &quot;location=东京, 日本&quot; -F &quot;lat=35.6938&quot; -F &quot;lng=139.7034&quot;{" "}
-                  {(settingsForm.siteUrl || "http://localhost:3000").replace(/\/$/, "")}/api/admin/upload
-                </div>
-                <div>
-                  # 3. 隐藏或修改单幅作品：PATCH /api/admin/photos/:id &#123;&quot;hidden&quot;:true&#125;
+                  POST /api/admin/upload · PATCH /api/admin/photos (group_merge/reorder) · POST /api/admin/asset (target=favicon|avatar, apply=true) · /api/admin/collections · /api/admin/gear · /api/admin/settings
                 </div>
               </div>
             </section>

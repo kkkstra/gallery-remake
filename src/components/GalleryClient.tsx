@@ -10,6 +10,7 @@ import {
   ChevronDown,
   Grid3x3,
   Images,
+  Layers,
   LayoutGrid,
   MapPin,
   Mountain,
@@ -21,6 +22,11 @@ import {
   X,
 } from "lucide-react";
 import type { Photo } from "@/lib/db/schema";
+import {
+  collapsePhotoListForDisplay,
+  formatNumberedTitle,
+  type DisplayPhotoCard,
+} from "@/lib/photo-groups";
 import { SiteHeader } from "./SiteHeader";
 import { SiteFooter } from "./SiteFooter";
 import { Lightbox } from "./Lightbox";
@@ -51,17 +57,18 @@ function CategoryIcon({ cat }: { cat: string }) {
 const TARGET_ROW_RATIO = 4.3;
 
 function buildJustifiedRows(
-  list: Photo[],
+  list: DisplayPhotoCard[],
   targetRatioSum = TARGET_ROW_RATIO,
   maxItems = 4
-): { items: { photo: Photo; flatIdx: number }[]; sum: number; isLast: boolean }[] {
-  const rows: { items: { photo: Photo; flatIdx: number }[]; sum: number; isLast: boolean }[] = [];
-  let current: { photo: Photo; flatIdx: number }[] = [];
+): { items: DisplayPhotoCard[]; sum: number; isLast: boolean }[] {
+  const rows: { items: DisplayPhotoCard[]; sum: number; isLast: boolean }[] = [];
+  let current: DisplayPhotoCard[] = [];
   let sum = 0;
 
-  list.forEach((p, flatIdx) => {
+  list.forEach((card) => {
+    const p = card.photo;
     const ratio = Math.max(0.55, Math.min(2.4, (p.width || 1600) / (p.height || 1068)));
-    current.push({ photo: p, flatIdx });
+    current.push(card);
     sum += ratio;
     if (sum >= targetRatioSum || current.length >= maxItems) {
       rows.push({ items: current, sum, isLast: false });
@@ -101,6 +108,7 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
   );
   const [gearOpen, setGearOpen] = useState(initialCamera !== "all" || initialLens !== "all");
   const [view, setViewState] = useState<"mosaic" | "index" | "sheet">(initialView);
+  const [expandGroups, setExpandGroups] = useState(false);
   const [lightboxIdx, setLightboxIdx] = useState<number | null>(null);
 
   // FLIP + Staggered Entrance animation refs
@@ -147,6 +155,11 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
     if (next === sortBy) return;
     captureSnapshot();
     setSortBy(next);
+  };
+
+  const toggleExpandGroups = () => {
+    captureSnapshot();
+    setExpandGroups((v) => !v);
   };
 
   const resetFilters = () => {
@@ -215,7 +228,7 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
         );
       }
     });
-  }, [view, category, camera, lens, sortBy]);
+  }, [view, category, camera, lens, sortBy, expandGroups]);
 
   const categories = useMemo(() => {
     const map = new Map<string, number>();
@@ -287,7 +300,8 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
           ? (b.takenAt || "").localeCompare(a.takenAt || "") || a.sortOrder - b.sortOrder || b.id - a.id
           : a.sortOrder - b.sortOrder || b.id - a.id
       );
-      const idx = sortedAll.findIndex((p) => p.id === qPhotoId);
+      const { lightboxPhotos: orderedLb } = collapsePhotoListForDisplay(sortedAll);
+      const idx = orderedLb.findIndex((p) => p.id === qPhotoId);
       if (idx >= 0) setLightboxIdx(idx);
       router.replace("/gallery", { scroll: false });
       return;
@@ -302,17 +316,40 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
     }
   }, [photos, router, searchParams]);
 
+  const hasCollapsibleGroups = useMemo(
+    () => collapsePhotoListForDisplay(filtered, { forceExpandAll: false }).cards.some((c) => c.isStackedCover),
+    [filtered]
+  );
+
+  const { cards: displayCards, lightboxPhotos } = useMemo(
+    () => collapsePhotoListForDisplay(filtered, { forceExpandAll: expandGroups }),
+    [expandGroups, filtered]
+  );
+
+  const cardTitle = useCallback(
+    (card: DisplayPhotoCard) => {
+      const p = card.photo;
+      if (card.isStackedCover || card.groupTotal <= 1) {
+        return pick(p.title, p.titleEn);
+      }
+      const info = { index: card.groupIndex, total: card.groupTotal };
+      return pick(formatNumberedTitle(p.title, info), formatNumberedTitle(p.titleEn, info));
+    },
+    [pick]
+  );
+
   // Build Year/Month Optical Timeline entries
   const timelineEntries = useMemo(() => {
     const list: { ym: string; year: string; month: string; count: number; firstPhotoId: number; isYearStart: boolean }[] = [];
     const indexByYm = new Map<string, number>();
     let prevYear = "";
-    for (const p of filtered) {
+    for (const card of displayCards) {
+      const p = card.photo;
       const ym = (p.takenAt || "").slice(0, 7);
       if (!/^\d{4}-\d{2}$/.test(ym)) continue;
       const existing = indexByYm.get(ym);
       if (existing !== undefined) {
-        list[existing].count += 1;
+        list[existing].count += card.isStackedCover ? card.groupTotal : 1;
       } else {
         const [year, month] = ym.split("-");
         indexByYm.set(ym, list.length);
@@ -320,7 +357,7 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
           ym,
           year,
           month,
-          count: 1,
+          count: card.isStackedCover ? card.groupTotal : 1,
           firstPhotoId: p.id,
           isYearStart: year !== prevYear,
         });
@@ -328,7 +365,7 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
       }
     }
     return list;
-  }, [filtered]);
+  }, [displayCards]);
 
   const [activeYm, setActiveYm] = useState<string>("");
   const [hoverYm, setHoverYm] = useState<string | null>(null);
@@ -390,7 +427,7 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
     return timelineEntries[Math.floor(ratio * timelineEntries.length)]?.ym ?? null;
   }, [timelineEntries]);
 
-  const mosaicRows = useMemo(() => buildJustifiedRows(filtered), [filtered]);
+  const mosaicRows = useMemo(() => buildJustifiedRows(displayCards), [displayCards]);
 
   const hasActiveFilter = category !== "all" || camera !== "all" || lens !== "all";
 
@@ -480,6 +517,38 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
             </div>
 
             <div className="flex items-center gap-1.5 sm:gap-2.5">
+              {hasCollapsibleGroups && (
+                <button
+                  type="button"
+                  onClick={toggleExpandGroups}
+                  title={
+                    expandGroups
+                      ? locale === "en"
+                        ? "Stack photo series"
+                        : "叠起组图"
+                      : locale === "en"
+                      ? "Expand all photo series"
+                      : "展开组图"
+                  }
+                  className={`inline-flex items-center gap-1 rounded-md border px-2 sm:px-2.5 py-1.5 text-xs transition cursor-pointer ${
+                    expandGroups
+                      ? "border-[var(--fg)] bg-[var(--fg)] text-[var(--bg)] font-medium"
+                      : "border-[var(--border)] bg-[var(--bg-elevated)] text-[var(--fg-muted)] hover:text-[var(--fg)]"
+                  }`}
+                >
+                  <Layers className="h-3.5 w-3.5 shrink-0" />
+                  <span className="hidden sm:inline">
+                    {expandGroups
+                      ? locale === "en"
+                        ? "Stack"
+                        : "叠起组图"
+                      : locale === "en"
+                      ? "Expand"
+                      : "展开组图"}
+                  </span>
+                </button>
+              )}
+
               {hasActiveFilter && (
                 <button
                   type="button"
@@ -722,9 +791,10 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
 
               return (
                 <div key={rIdx} className={`flex flex-col sm:flex-row gap-2 ${rIdx >= 2 ? "cv-auto" : ""}`}>
-                  {row.items.map(({ photo, flatIdx }) => {
+                  {row.items.map((card) => {
+                    const { photo, flatIdx, isStackedCover, groupTotal, groupIndex } = card;
                     const ratio = Math.max(0.55, Math.min(2.4, (photo.width || 1600) / (photo.height || 1068)));
-                    const title = pick(photo.title, photo.titleEn);
+                    const title = cardTitle(card);
                     const place = pick(photo.location, photo.locationEn);
                     return (
                       <figure
@@ -745,6 +815,12 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
                           aspectRatio={`${photo.width || 1600} / ${photo.height || 1068}`}
                           className="w-full h-full"
                         />
+                        {groupTotal > 1 && (
+                          <span className="pointer-events-none absolute right-2.5 top-2.5 z-10 inline-flex items-center gap-1 rounded-full border border-white/20 bg-black/55 px-2 py-0.5 text-[11px] font-medium text-white backdrop-blur-md">
+                            <Layers className="h-3 w-3" />
+                            <span>{isStackedCover ? groupTotal : `${groupIndex}/${groupTotal}`}</span>
+                          </span>
+                        )}
                         <figcaption className="glass-strip pointer-events-none absolute inset-x-0 bottom-0 flex items-center justify-between gap-3 px-3.5 py-2.5 text-sm text-zinc-100 opacity-0 translate-y-1 transition-all duration-300 group-hover:opacity-100 group-hover:translate-y-0">
                           <div className="min-w-0">
                             <div className="truncate font-medium">{title}</div>
@@ -778,9 +854,10 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
           /* View 2: Dense Span-Aware Bento Index */
           <main className="mx-auto max-w-[1440px] px-4 sm:px-9 pt-5 sm:pt-7">
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5 sm:gap-6 sm:auto-rows-[305px] grid-flow-dense">
-              {filtered.map((photo, flatIdx) => {
+              {displayCards.map((card, cardIdx) => {
+                const { photo, flatIdx, isStackedCover, groupTotal, groupIndex } = card;
                 const isPortrait = (photo.height || 1068) > (photo.width || 1600) * 1.1;
-                const title = pick(photo.title, photo.titleEn);
+                const title = cardTitle(card);
                 const place = pick(photo.location, photo.locationEn);
 
                 return (
@@ -793,16 +870,24 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
                       isPortrait ? "sm:row-span-2" : "sm:row-span-1"
                     }`}
                   >
-                    <GalleryImage
-                      photoId={photo.id}
-                      src={photo.url}
-                      alt={title}
-                      ambient={photo.ambient}
-                      blurData={photo.blurData}
-                      priority={flatIdx < 4}
-                      style={{ "--mobile-ar": `${photo.width || 1600} / ${photo.height || 1068}` } as React.CSSProperties}
-                      className="flex-1 [aspect-ratio:var(--mobile-ar)] sm:[aspect-ratio:auto] sm:min-h-0"
-                    />
+                    <div className="relative flex flex-1 min-h-0 flex-col">
+                      <GalleryImage
+                        photoId={photo.id}
+                        src={photo.url}
+                        alt={title}
+                        ambient={photo.ambient}
+                        blurData={photo.blurData}
+                        priority={cardIdx < 4}
+                        style={{ "--mobile-ar": `${photo.width || 1600} / ${photo.height || 1068}` } as React.CSSProperties}
+                        className="flex-1 [aspect-ratio:var(--mobile-ar)] sm:[aspect-ratio:auto] sm:min-h-0"
+                      />
+                      {groupTotal > 1 && (
+                        <span className="pointer-events-none absolute right-2.5 top-2.5 z-10 inline-flex items-center gap-1 rounded-full border border-white/20 bg-black/55 px-2 py-0.5 text-[11px] font-medium text-white backdrop-blur-md">
+                          <Layers className="h-3 w-3" />
+                          <span>{isStackedCover ? groupTotal : `${groupIndex}/${groupTotal}`}</span>
+                        </span>
+                      )}
+                    </div>
                     <figcaption className="pt-2.5 shrink-0 flex items-center justify-between gap-3 text-sm">
                       <div className="flex items-center gap-2 min-w-0">
                         <span className="font-medium text-[var(--fg)] truncate">{title}</span>
@@ -827,8 +912,9 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
           /* View 3: Darkroom Contact Sheet (Uncropped Full-Frame Negatives + Frame Numbers) */
           <main className="mx-auto max-w-[1440px] px-4 sm:px-9 pt-5 sm:pt-7">
             <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-x-3 gap-y-5 sm:gap-x-5 sm:gap-y-7">
-              {filtered.map((photo, flatIdx) => {
-                const title = pick(photo.title, photo.titleEn);
+              {displayCards.map((card, cardIdx) => {
+                const { photo, flatIdx, isStackedCover, groupTotal, groupIndex } = card;
+                const title = cardTitle(card);
                 return (
                   <figure
                     key={photo.id}
@@ -838,8 +924,16 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
                     className="group flex flex-col cursor-pointer"
                   >
                     <div className="flex items-center justify-between pb-1.5 text-[10px] tracking-wider text-[var(--fg-subtle)]">
-                      <span>#{String(flatIdx + 1).padStart(2, "0")}A</span>
-                      <span>{photo.focalMm ? `${photo.focalMm}mm` : ""}</span>
+                      <span>#{String(cardIdx + 1).padStart(2, "0")}A</span>
+                      <span className="inline-flex items-center gap-1">
+                        {groupTotal > 1 && (
+                          <span className="inline-flex items-center gap-0.5 text-[var(--fg)] font-semibold">
+                            <Layers className="h-2.5 w-2.5" />
+                            {isStackedCover ? groupTotal : `${groupIndex}/${groupTotal}`}
+                          </span>
+                        )}
+                        {photo.focalMm ? `${photo.focalMm}mm` : ""}
+                      </span>
                     </div>
                     <div className="aspect-square flex items-center justify-center rounded-xs border border-[var(--border)] bg-[var(--bg-subtle)] p-2 sm:p-2.5 group-hover:border-[var(--fg-muted)] transition-colors">
                       <img
@@ -948,7 +1042,7 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
       <SiteFooter settings={settings} />
 
       <Lightbox
-        photos={filtered}
+        photos={lightboxPhotos}
         activeIndex={lightboxIdx}
         collectionsMap={collectionsMap}
         photographerName={settings.photographerName}

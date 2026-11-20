@@ -28,7 +28,10 @@ export interface CollectionWithPhotos extends Collection {
 
 async function fetchAllPhotosRaw(): Promise<Photo[]> {
   await ensureDb();
-  return db.select().from(photos).orderBy(asc(photos.sortOrder), desc(photos.id));
+  return db
+    .select()
+    .from(photos)
+    .orderBy(asc(photos.sortOrder), asc(photos.groupOrder), desc(photos.id));
 }
 
 const getCachedPublicPhotos = cache(
@@ -37,7 +40,7 @@ const getCachedPublicPhotos = cache(
       const rows = await fetchAllPhotosRaw();
       return rows.filter((p) => !p.hidden);
     },
-    ["public-photos"],
+    ["public-photos-v4"],
     { tags: [GALLERY_CACHE_TAG], revalidate: 300 }
   )
 );
@@ -102,7 +105,7 @@ async function fetchCollectionsBundleRaw(includeHidden: boolean) {
 const getCachedPublicCollectionsBundle = cache(
   unstable_cache(
     async () => fetchCollectionsBundleRaw(false),
-    ["public-collections-bundle"],
+    ["public-collections-bundle-v4"],
     { tags: [GALLERY_CACHE_TAG], revalidate: 300 }
   )
 );
@@ -154,7 +157,7 @@ export async function fetchSiteSettingsFresh(): Promise<Record<string, string>> 
   const rows = await db.select().from(siteSettings);
   const map: Record<string, string> = { ...INITIAL_SETTINGS };
   for (const r of rows) {
-    if (r.key !== "schema_v3") map[r.key] = r.value;
+    if (!r.key.startsWith("schema_v")) map[r.key] = r.value;
   }
   return map;
 }

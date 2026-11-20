@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   Aperture,
@@ -33,6 +33,7 @@ import {
   ZoomOut,
 } from "lucide-react";
 import type { Photo } from "@/lib/db/schema";
+import { buildGroupMap, formatNumberedTitle } from "@/lib/photo-groups";
 import { ViewLink } from "./ViewLink";
 import { PrintCardModal } from "./PrintCardModal";
 import { optImg } from "@/lib/image-url";
@@ -680,9 +681,15 @@ export function Lightbox({
     setTimeout(() => setCopiedShare(false), 1800);
   };
 
+  const groupMap = useMemo(() => buildGroupMap(photos), [photos]);
+  const photoIndexById = useMemo(() => new Map(photos.map((p, i) => [p.id, i])), [photos]);
+  const groupInfo = photo ? groupMap.get(photo.id) : undefined;
+
   const belongingCols = collectionsMap?.[photo.id] ?? [];
-  const title = pick(photo.title, photo.titleEn);
-  const subtitle = locale === "zh" ? photo.titleEn : photo.title;
+  const numberedZh = formatNumberedTitle(photo.title, groupInfo);
+  const numberedEn = formatNumberedTitle(photo.titleEn, groupInfo);
+  const title = pick(numberedZh, numberedEn);
+  const subtitle = locale === "zh" ? numberedEn : numberedZh;
   const desc = pick(photo.description, photo.descriptionEn);
   const place = pick(photo.location, photo.locationEn);
 
@@ -727,6 +734,16 @@ export function Lightbox({
             <span className="shrink-0 font-semibold text-[var(--fg)]">
               {String(activeIndex + 1).padStart(2, "0")} / {String(photos.length).padStart(2, "0")}
             </span>
+            {groupInfo && groupInfo.total > 1 && (
+              <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-[var(--border)] bg-[var(--bg-subtle)] px-2 py-0.5 text-[11px] font-medium text-[var(--fg)]">
+                <Layers className="h-3 w-3 opacity-80" />
+                <span>
+                  {locale === "en"
+                    ? `Series ${groupInfo.index}/${groupInfo.total}`
+                    : `组图 ${groupInfo.index}/${groupInfo.total}`}
+                </span>
+              </span>
+            )}
             {place && (
               <>
                 <span className="hidden min-[390px]:inline opacity-40">·</span>
@@ -1035,14 +1052,20 @@ export function Lightbox({
               <div className="mx-auto flex w-max items-center gap-1.5 sm:gap-2 px-1 py-0.5">
                 {photos.map((item, idx) => {
                   const active = idx === activeIndex;
+                  const itemGroup = groupMap.get(item.id);
+                  const inSameGroup = Boolean(groupInfo && itemGroup?.groupId === groupInfo.groupId);
                   return (
                     <button
                       key={item.id}
                       type="button"
                       data-film-active={active ? "true" : undefined}
                       onClick={() => onChangeIndex(idx)}
-                      className={`h-10 w-14 sm:h-11 sm:w-16 shrink-0 rounded-xs overflow-hidden transition-all duration-200 cursor-pointer ${
-                        active ? "opacity-100 ring-2 ring-[var(--fg)]" : "opacity-40 hover:opacity-80"
+                      className={`relative h-10 w-14 sm:h-11 sm:w-16 shrink-0 rounded-xs overflow-hidden transition-all duration-200 cursor-pointer ${
+                        active
+                          ? "opacity-100 ring-2 ring-[var(--fg)]"
+                          : inSameGroup
+                          ? "opacity-80 ring-1 ring-[var(--fg-muted)]/60 hover:opacity-100"
+                          : "opacity-40 hover:opacity-80"
                       }`}
                     >
                       <img
@@ -1052,6 +1075,11 @@ export function Lightbox({
                         alt={item.title}
                         className="h-full w-full object-cover"
                       />
+                      {itemGroup && itemGroup.total > 1 && (
+                        <span className="pointer-events-none absolute right-1 bottom-0.5 rounded bg-black/65 px-1 text-[9px] font-semibold leading-tight text-white">
+                          {itemGroup.index}
+                        </span>
+                      )}
                     </button>
                   );
                 })}
@@ -1118,6 +1146,51 @@ export function Lightbox({
                 <p className="pt-0.5 text-sm leading-relaxed text-[var(--fg-muted)] select-text">
                   {desc}
                 </p>
+              )}
+
+              {groupInfo && groupInfo.total > 1 && (
+                <div className="space-y-2 pt-2">
+                  <div className="flex items-center justify-between text-xs text-[var(--fg-muted)]">
+                    <span className="inline-flex items-center gap-1.5 font-medium text-[var(--fg)]">
+                      <Layers className="h-3.5 w-3.5 opacity-80" />
+                      {locale === "en" ? "Series Frames" : "同组连作"}
+                    </span>
+                    <span>
+                      {groupInfo.index} / {groupInfo.total}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
+                    {groupInfo.siblings.map((sib, sIdx) => {
+                      const targetIdx = photoIndexById.get(sib.id);
+                      const isCurr = sib.id === photo.id;
+                      return (
+                        <button
+                          key={sib.id}
+                          type="button"
+                          onClick={() => {
+                            if (targetIdx !== undefined) onChangeIndex(targetIdx);
+                          }}
+                          className={`relative h-11 w-15 shrink-0 overflow-hidden rounded-xs transition cursor-pointer ${
+                            isCurr
+                              ? "ring-2 ring-[var(--fg)] opacity-100"
+                              : "opacity-55 hover:opacity-95 ring-1 ring-[var(--border)]"
+                          }`}
+                        >
+                          <img
+                            src={optImg(sib.url, 128, 75)}
+                            loading="lazy"
+                            decoding="async"
+                            alt=""
+                            className="h-full w-full object-cover"
+                          />
+                          <span className="absolute left-1 bottom-0.5 rounded bg-black/65 px-1 text-[10px] font-semibold leading-tight text-white">
+                            {sIdx + 1}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
               )}
             </div>
 
@@ -1363,7 +1436,7 @@ export function Lightbox({
 
       {showPrintModal && (
         <PrintCardModal
-          photo={photo}
+          photo={{ ...photo, title: numberedZh, titleEn: numberedEn }}
           swatches={hist?.swatches ?? []}
           photographerName={photographerName}
           photographerNameEn={photographerNameEn}

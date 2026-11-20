@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   Aperture,
   ArrowLeft,
@@ -18,6 +18,8 @@ import {
   Timer,
 } from "lucide-react";
 import type { Photo } from "@/lib/db/schema";
+import { optImg } from "@/lib/image-url";
+import { buildGroupMap, formatNumberedTitle } from "@/lib/photo-groups";
 import { SiteHeader } from "./SiteHeader";
 import { SiteFooter } from "./SiteFooter";
 import { GalleryImage } from "./GalleryImage";
@@ -53,8 +55,11 @@ export function PhotoDetailClient({
   const [showPrint, setShowPrint] = useState(false);
   const [copied, setCopied] = useState(false);
 
-  const title = pick(photo.title, photo.titleEn);
-  const subtitle = locale === "zh" ? photo.titleEn : photo.title;
+  const groupInfo = useMemo(() => buildGroupMap(allPhotos).get(photo.id), [allPhotos, photo.id]);
+  const numberedZh = formatNumberedTitle(photo.title, groupInfo);
+  const numberedEn = formatNumberedTitle(photo.titleEn, groupInfo);
+  const title = pick(numberedZh, numberedEn);
+  const subtitle = locale === "zh" ? numberedEn : numberedZh;
   const desc = pick(photo.description, photo.descriptionEn);
   const place = pick(photo.location, photo.locationEn);
 
@@ -111,19 +116,62 @@ export function PhotoDetailClient({
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-12 items-start">
           {/* Artwork Stage */}
-          <div
-            onClick={() => setLightboxIdx(initialIndex)}
-            className="lg:col-span-8 group cursor-zoom-in"
-          >
-            <GalleryImage
-              photoId={photo.id}
-              src={photo.url}
-              alt={title}
-              ambient={photo.ambient}
-              blurData={photo.blurData}
-              aspectRatio={`${photo.width || 1600} / ${photo.height || 1068}`}
-              className="w-full"
-            />
+          <div className="lg:col-span-8 space-y-4">
+            <div
+              onClick={() => setLightboxIdx(initialIndex)}
+              className="group cursor-zoom-in"
+            >
+              <GalleryImage
+                photoId={photo.id}
+                src={photo.url}
+                alt={title}
+                ambient={photo.ambient}
+                blurData={photo.blurData}
+                aspectRatio={`${photo.width || 1600} / ${photo.height || 1068}`}
+                className="w-full"
+              />
+            </div>
+
+            {groupInfo && groupInfo.total > 1 && (
+              <div className="surface-card rounded-lg p-3.5 sm:p-4 space-y-2.5">
+                <div className="flex items-center justify-between text-xs text-[var(--fg-muted)]">
+                  <span className="inline-flex items-center gap-1.5 font-medium text-[var(--fg)]">
+                    <Layers className="h-3.5 w-3.5 opacity-80" />
+                    {locale === "en" ? "Series Frames" : "同组作品"}
+                  </span>
+                  <span>
+                    {groupInfo.index} / {groupInfo.total}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2.5 overflow-x-auto no-scrollbar pb-0.5">
+                  {groupInfo.siblings.map((sib, sIdx) => {
+                    const isCurr = sib.id === photo.id;
+                    return (
+                      <ViewLink
+                        key={sib.id}
+                        href={`/photo/${sib.id}`}
+                        className={`group/sib relative h-16 w-24 shrink-0 overflow-hidden rounded-xs transition ${
+                          isCurr
+                            ? "ring-2 ring-[var(--fg)] opacity-100"
+                            : "opacity-60 hover:opacity-100 ring-1 ring-[var(--border)]"
+                        }`}
+                      >
+                        <img
+                          src={optImg(sib.url, 256, 75)}
+                          loading="lazy"
+                          decoding="async"
+                          alt=""
+                          className="h-full w-full object-cover"
+                        />
+                        <span className="absolute left-1.5 bottom-1 rounded bg-black/65 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">
+                          #{sIdx + 1}
+                        </span>
+                      </ViewLink>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Metadata Column */}
@@ -296,7 +344,7 @@ export function PhotoDetailClient({
 
       {showPrint && (
         <PrintCardModal
-          photo={photo}
+          photo={{ ...photo, title: numberedZh, titleEn: numberedEn }}
           swatches={[]}
           photographerName={settings.photographerName}
           photographerNameEn={settings.photographerNameEn}

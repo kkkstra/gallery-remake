@@ -3,7 +3,7 @@ import { isAdminAuthenticated } from "@/lib/auth";
 import { createPresignedUpload } from "@/lib/storage";
 
 export async function POST(req: Request) {
-  if (!(await isAdminAuthenticated())) {
+  if (!(await isAdminAuthenticated(req))) {
     return NextResponse.json({ error: "未授权" }, { status: 401 });
   }
 

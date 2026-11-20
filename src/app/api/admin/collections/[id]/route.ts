@@ -50,7 +50,8 @@ export async function PATCH(
   }
 
   invalidateGalleryCache();
-  return NextResponse.json({ ok: true });
+  const all = await getCollectionsWithPhotos({ includeHidden: true });
+  return NextResponse.json({ ok: true, collection: all.find((c) => c.id === id) ?? null });
 }
 
 export async function DELETE(

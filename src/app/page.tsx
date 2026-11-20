@@ -1,7 +1,6 @@
 import {
   getAllPhotos,
   getCollectionsWithPhotos,
-  getFeaturedPhotos,
   getPhotoCollectionsMap,
   getSiteSettings,
 } from "@/lib/queries";
@@ -10,8 +9,7 @@ import { HomeStageClient } from "@/components/HomeStageClient";
 export const revalidate = 300;
 
 export default async function HomePage() {
-  const [featuredPhotos, allPhotos, collections, collectionsMap, settings] = await Promise.all([
-    getFeaturedPhotos(),
+  const [allPhotos, collections, collectionsMap, settings] = await Promise.all([
     getAllPhotos(),
     getCollectionsWithPhotos(),
     getPhotoCollectionsMap(),
@@ -20,7 +18,6 @@ export default async function HomePage() {
 
   return (
     <HomeStageClient
-      featuredPhotos={featuredPhotos}
       allPhotos={allPhotos}
       collections={collections}
       collectionsMap={collectionsMap}

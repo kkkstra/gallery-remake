@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Aperture, ArrowLeft, ArrowRight, Camera, Images, MapPin } from "lucide-react";
 import type { CollectionWithPhotos } from "@/lib/queries";
 import type { Photo } from "@/lib/db/schema";
+import { buildGroupMap, formatNumberedTitle } from "@/lib/photo-groups";
 import { parseMonographBlocks, type MonographCoverBlock, type MonographPhotoBlock } from "@/lib/monograph";
 import { SiteHeader } from "./SiteHeader";
 import { SiteFooter } from "./SiteFooter";
@@ -137,8 +138,14 @@ export function CollectionDetailClient({
     };
   }, [segments.length]);
 
+  const groupMap = useMemo(() => buildGroupMap(orderedPhotos), [orderedPhotos]);
+  const photoTitle = (p: Photo) => {
+    const info = groupMap.get(p.id);
+    return pick(formatNumberedTitle(p.title, info), formatNumberedTitle(p.titleEn, info));
+  };
+
   const PlateCaption = ({ photo }: { photo: Photo }) => {
-    const pTitle = pick(photo.title, photo.titleEn);
+    const pTitle = photoTitle(photo);
     const pPlace = pick(photo.location, photo.locationEn);
     return (
       <figcaption className="mt-3 flex flex-wrap items-center justify-between gap-3 text-sm">
@@ -383,7 +390,7 @@ export function CollectionDetailClient({
                   >
                     <div className="border-l-2 border-[var(--border)] pl-5 space-y-2.5">
                       <h3 className="text-lg sm:text-xl font-semibold text-[var(--fg)]">
-                        {pick(photo.title, photo.titleEn)}
+                        {photoTitle(photo)}
                       </h3>
                       <p className="text-sm sm:text-[15px] leading-7 text-[var(--fg-muted)] whitespace-pre-line">
                         {noteText}

@@ -48,11 +48,77 @@ const CITY_GAZETTEER: { keys: string[]; lat: number; lng: number; zh: string; en
 ];
 
 export async function GET(req: Request) {
-  if (!(await isAdminAuthenticated())) {
+  if (!(await isAdminAuthenticated(req))) {
     return NextResponse.json({ error: "未授权" }, { status: 401 });
   }
 
-  const q = (new URL(req.url).searchParams.get("q") || "").trim();
+  const sp = new URL(req.url).searchParams;
+  const rawLat = sp.get("lat");
+  const rawLng = sp.get("lng");
+
+  // Reverse geocoding mode (`?lat=...&lng=...`)
+  if (rawLat !== null && rawLng !== null && rawLat !== "" && rawLng !== "") {
+    const lat = Number(rawLat);
+    const lng = Number(rawLng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      return NextResponse.json({ error: "无效的经纬度坐标" }, { status: 400 });
+    }
+    let nearest: (typeof CITY_GAZETTEER)[number] | null = null;
+    let bestDist = Infinity;
+    for (const item of CITY_GAZETTEER) {
+      const d = Math.hypot(item.lat - lat, item.lng - lng);
+      if (d < bestDist) {
+        bestDist = d;
+        nearest = item;
+      }
+    }
+    if (nearest && bestDist < 0.45) {
+      return NextResponse.json({
+        lat: Number(lat.toFixed(5)),
+        lng: Number(lng.toFixed(5)),
+        location: nearest.zh,
+        locationEn: nearest.en,
+      });
+    }
+    try {
+      const [zhRes, enRes] = await Promise.all([
+        fetch(
+          `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=10&accept-language=zh-CN`,
+          { headers: { "User-Agent": "GalleryPortfolio/1.0" }, signal: AbortSignal.timeout(4500) }
+        ),
+        fetch(
+          `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=10&accept-language=en`,
+          { headers: { "User-Agent": "GalleryPortfolio/1.0" }, signal: AbortSignal.timeout(4500) }
+        ),
+      ]);
+      if (zhRes.ok) {
+        const zhData = await zhRes.json();
+        const enData = enRes.ok ? await enRes.json() : null;
+        const zhAddr = zhData.address || {};
+        const enAddr = enData?.address || {};
+        const zhCity = zhAddr.city || zhAddr.town || zhAddr.county || zhAddr.state || "";
+        const zhCountry = zhAddr.country || "";
+        const enCity = enAddr.city || enAddr.town || enAddr.county || enAddr.state || "";
+        const enCountry = enAddr.country || "";
+        return NextResponse.json({
+          lat: Number(lat.toFixed(5)),
+          lng: Number(lng.toFixed(5)),
+          location: [zhCity, zhCountry].filter(Boolean).join(", "),
+          locationEn: [enCity, enCountry].filter(Boolean).join(", "),
+        });
+      }
+    } catch {
+      // ignore network error
+    }
+    return NextResponse.json({
+      lat: Number(lat.toFixed(5)),
+      lng: Number(lng.toFixed(5)),
+      location: "",
+      locationEn: "",
+    });
+  }
+
+  const q = (sp.get("q") || "").trim();
   if (!q) {
     return NextResponse.json({ error: "请输入地点名称" }, { status: 400 });
   }
