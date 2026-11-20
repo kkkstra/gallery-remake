@@ -49,6 +49,7 @@ import {
 import type { AboutFocusItem, AboutMilestoneItem } from "./AboutClient";
 import { extractExifFromBuffer } from "@/lib/exif";
 import { AdminMapPicker } from "./AdminMapPicker";
+import { optImg } from "@/lib/image-url";
 import { CameraIllustration, LensIllustration } from "./GearIllustrations";
 import { usePreferences } from "./PreferencesProvider";
 
@@ -1446,7 +1447,9 @@ export function AdminClient({
                       >
                         <div className="relative aspect-[3/2] bg-[var(--bg-subtle)] overflow-hidden">
                           <img
-                            src={photo.url}
+                            src={optImg(photo.url, 384, 75)}
+                            loading="lazy"
+                            decoding="async"
                             alt={photo.title}
                             className={`h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.03] ${
                               photo.hidden ? "opacity-45 grayscale-[35%]" : ""
@@ -1563,7 +1566,9 @@ export function AdminClient({
                             }
                           />
                           <img
-                            src={photo.url}
+                            src={optImg(photo.url, 128, 75)}
+                            loading="lazy"
+                            decoding="async"
                             alt=""
                             className={`h-11 w-16 shrink-0 rounded-xs object-cover ${
                               photo.hidden ? "opacity-45 grayscale" : ""
@@ -1715,7 +1720,8 @@ export function AdminClient({
                   {/* Preview + Quick Featured / Hidden / Delete */}
                   <div className="flex items-center gap-3 shrink-0">
                     <img
-                      src={editingPhoto.url}
+                      src={optImg(editingPhoto.url, 256, 75)}
+                      decoding="async"
                       alt=""
                       className={`h-16 w-24 shrink-0 rounded-md object-cover ring-1 ring-[var(--border)] ${
                         editingPhoto.hidden ? "opacity-50 grayscale" : ""
@@ -2198,7 +2204,7 @@ export function AdminClient({
                       <div className="flex items-center gap-3 min-w-0">
                         <GripVertical className="h-4 w-4 shrink-0 text-[var(--fg-subtle)] cursor-grab" />
                         {col.coverUrl && (
-                          <img src={col.coverUrl} alt="" className="h-12 w-18 shrink-0 rounded-sm object-cover" />
+                          <img src={optImg(col.coverUrl, 256, 75)} loading="lazy" decoding="async" alt="" className="h-12 w-18 shrink-0 rounded-sm object-cover" />
                         )}
                         <div className="min-w-0">
                           <div className="truncate text-sm font-semibold text-[var(--fg)]">{col.title}</div>
@@ -2384,7 +2390,7 @@ export function AdminClient({
                                 included ? "ring-2 ring-[var(--fg)] opacity-100" : "opacity-40 hover:opacity-80"
                               }`}
                             >
-                              <img src={p.url} alt={p.title} className="h-full w-full object-cover" />
+                              <img src={optImg(p.url, 256, 75)} loading="lazy" decoding="async" alt={p.title} className="h-full w-full object-cover" />
                               {included && (
                                 <span className="absolute right-1 top-1 rounded-full bg-[var(--fg)] p-0.5 text-[var(--bg)]">
                                   <Check className="h-2.5 w-2.5" />
@@ -2501,7 +2507,9 @@ export function AdminClient({
                                 <div className="flex items-center gap-2.5">
                                   {block.imageUrl && (
                                     <img
-                                      src={block.imageUrl}
+                                      src={optImg(block.imageUrl, 256, 75)}
+                                      loading="lazy"
+                                      decoding="async"
                                       alt=""
                                       className="h-10 w-15 shrink-0 rounded-xs object-cover"
                                     />
@@ -2591,7 +2599,7 @@ export function AdminClient({
                               <div className="flex items-center gap-3 min-w-0">
                                 <GripVertical className="h-4 w-4 shrink-0 text-[var(--fg-subtle)] cursor-grab" />
                                 <div className="relative h-11 w-16 shrink-0 overflow-hidden rounded-xs">
-                                  <img src={p.url} alt="" className="h-full w-full object-cover" />
+                                  <img src={optImg(p.url, 256, 75)} loading="lazy" decoding="async" alt="" className="h-full w-full object-cover" />
                                   <button
                                     type="button"
                                     onClick={() => setEditingCol({ ...editingCol, coverUrl: p.url })}
@@ -2836,7 +2844,8 @@ export function AdminClient({
             <section className="surface-card flex flex-wrap items-center justify-between gap-4 rounded-xl p-5">
               <div className="flex items-center gap-4">
                 <img
-                  src={settingsForm.avatarUrl || "/samples/avatar.jpg"}
+                  src={optImg(settingsForm.avatarUrl || "/samples/avatar.jpg", 256, 75)}
+                  decoding="async"
                   alt=""
                   className="h-14 w-14 rounded-full object-cover ring-1 ring-[var(--border)]"
                 />

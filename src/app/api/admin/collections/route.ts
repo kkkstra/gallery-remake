@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import { isAdminAuthenticated } from "@/lib/auth";
 import { db, ensureDb } from "@/lib/db";
 import { collections } from "@/lib/db/schema";
-import { getCollectionsWithPhotos, setCollectionPhotoIds } from "@/lib/queries";
+import { getCollectionsWithPhotos, invalidateGalleryCache, setCollectionPhotoIds } from "@/lib/queries";
 
 export async function GET(req: Request) {
   if (!(await isAdminAuthenticated(req))) {
@@ -47,22 +47,26 @@ export async function POST(req: Request) {
     await setCollectionPhotoIds(created.id, body.photoIds.map(Number));
   }
 
+  invalidateGalleryCache();
   return NextResponse.json({ collection: created });
 }
 
 export async function PUT(req: Request) {
-  if (!(await isAdminAuthenticated())) {
+  if (!(await isAdminAuthenticated(req))) {
     return NextResponse.json({ error: "未授权" }, { status: 401 });
   }
   await ensureDb();
   const { orderedIds } = (await req.json()) as { orderedIds: number[] };
   if (Array.isArray(orderedIds)) {
-    for (let i = 0; i < orderedIds.length; i++) {
-      await db
-        .update(collections)
-        .set({ sortOrder: i + 1 })
-        .where(eq(collections.id, Number(orderedIds[i])));
-    }
+    await Promise.all(
+      orderedIds.map((id, i) =>
+        db
+          .update(collections)
+          .set({ sortOrder: i + 1 })
+          .where(eq(collections.id, Number(id)))
+      )
+    );
   }
+  invalidateGalleryCache();
   return NextResponse.json({ ok: true });
 }

@@ -34,6 +34,15 @@ export function ensureDb(): Promise<void> {
 }
 
 async function bootstrapDb() {
+  try {
+    const marker = await client.execute(
+      "SELECT value FROM site_settings WHERE key = 'schema_v3' LIMIT 1"
+    );
+    if (marker.rows.length > 0) return;
+  } catch {
+    // Fresh database — proceed with full bootstrap
+  }
+
   await client.executeMultiple(`
     CREATE TABLE IF NOT EXISTS photos (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -164,6 +173,10 @@ async function bootstrapDb() {
     for (const g of INITIAL_GEAR) {
       await db.insert(schema.gear).values(g);
     }
+    await db
+      .insert(schema.siteSettings)
+      .values({ key: "schema_v3", value: "1" })
+      .onConflictDoUpdate({ target: schema.siteSettings.key, set: { value: "1" } });
     return;
   }
 
@@ -308,4 +321,9 @@ async function bootstrapDb() {
       .set({ blocksJson: JSON.stringify(blocks) })
       .where(eq(schema.collections.id, col.id));
   }
+
+  await db
+    .insert(schema.siteSettings)
+    .values({ key: "schema_v3", value: "1" })
+    .onConflictDoUpdate({ target: schema.siteSettings.key, set: { value: "1" } });
 }

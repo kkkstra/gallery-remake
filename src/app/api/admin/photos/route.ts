@@ -3,7 +3,7 @@ import { eq, inArray } from "drizzle-orm";
 import { isAdminAuthenticated } from "@/lib/auth";
 import { db, ensureDb } from "@/lib/db";
 import { collectionPhotos, photos } from "@/lib/db/schema";
-import { getAllPhotos } from "@/lib/queries";
+import { getAllPhotos, invalidateGalleryCache } from "@/lib/queries";
 
 export async function GET(req: Request) {
   if (!(await isAdminAuthenticated(req))) {
@@ -88,28 +88,32 @@ export async function POST(req: Request) {
     }
   }
 
+  invalidateGalleryCache();
   return NextResponse.json({ photo: created });
 }
 
 export async function PUT(req: Request) {
-  if (!(await isAdminAuthenticated())) {
+  if (!(await isAdminAuthenticated(req))) {
     return NextResponse.json({ error: "未授权" }, { status: 401 });
   }
   await ensureDb();
   const { orderedIds } = (await req.json()) as { orderedIds: number[] };
   if (Array.isArray(orderedIds)) {
-    for (let i = 0; i < orderedIds.length; i++) {
-      await db
-        .update(photos)
-        .set({ sortOrder: i + 1 })
-        .where(eq(photos.id, Number(orderedIds[i])));
-    }
+    await Promise.all(
+      orderedIds.map((id, i) =>
+        db
+          .update(photos)
+          .set({ sortOrder: i + 1 })
+          .where(eq(photos.id, Number(id)))
+      )
+    );
   }
+  invalidateGalleryCache();
   return NextResponse.json({ ok: true });
 }
 
 export async function PATCH(req: Request) {
-  if (!(await isAdminAuthenticated())) {
+  if (!(await isAdminAuthenticated(req))) {
     return NextResponse.json({ error: "未授权" }, { status: 401 });
   }
   await ensureDb();
@@ -142,5 +146,6 @@ export async function PATCH(req: Request) {
     await db.delete(photos).where(inArray(photos.id, ids));
   }
 
+  invalidateGalleryCache();
   return NextResponse.json({ ok: true, count: ids.length });
 }

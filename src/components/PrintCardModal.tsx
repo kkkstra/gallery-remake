@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Check, Download, X } from "lucide-react";
 import type { Photo } from "@/lib/db/schema";
 import { usePreferences } from "./PreferencesProvider";
+import { optImg } from "@/lib/image-url";
 
 export type PrintTemplate = "classic" | "darkroom" | "editorial";
 
@@ -123,7 +124,7 @@ export function PrintCardModal({
 
     const img = new Image();
     img.crossOrigin = "anonymous";
-    img.src = photo.url;
+    img.src = optImg(photo.url, 2048, 85);
     img.onload = () => {
       if (cancelled || !canvasRef.current) return;
       const canvas = canvasRef.current;

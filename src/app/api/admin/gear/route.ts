@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import { isAdminAuthenticated } from "@/lib/auth";
 import { db, ensureDb } from "@/lib/db";
 import { gear } from "@/lib/db/schema";
-import { getAllGear } from "@/lib/queries";
+import { getAllGear, invalidateGalleryCache } from "@/lib/queries";
 
 export async function GET(req: Request) {
   if (!(await isAdminAuthenticated(req))) {
@@ -36,11 +36,12 @@ export async function POST(req: Request) {
     })
     .returning();
 
+  invalidateGalleryCache();
   return NextResponse.json({ gear: created });
 }
 
 export async function PATCH(req: Request) {
-  if (!(await isAdminAuthenticated())) {
+  if (!(await isAdminAuthenticated(req))) {
     return NextResponse.json({ error: "未授权" }, { status: 401 });
   }
   await ensureDb();
@@ -60,16 +61,18 @@ export async function PATCH(req: Request) {
       noteEn: String(body.noteEn || ""),
     })
     .where(eq(gear.id, id));
+  invalidateGalleryCache();
   return NextResponse.json({ ok: true });
 }
 
 export async function DELETE(req: Request) {
-  if (!(await isAdminAuthenticated())) {
+  if (!(await isAdminAuthenticated(req))) {
     return NextResponse.json({ error: "未授权" }, { status: 401 });
   }
   await ensureDb();
   const { searchParams } = new URL(req.url);
   const id = Number(searchParams.get("id"));
   if (id) await db.delete(gear).where(eq(gear.id, id));
+  invalidateGalleryCache();
   return NextResponse.json({ ok: true });
 }

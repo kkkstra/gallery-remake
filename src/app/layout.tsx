@@ -43,7 +43,6 @@ export default async function RootLayout({ children }: { children: React.ReactNo
         <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
       </head>
       <body className="min-h-dvh selection:bg-zinc-800 selection:text-white">
-        <div className="ambient-grain" aria-hidden="true" />
         <PreferencesProvider copyrightGuard={copyrightGuard}>
           {children}
           <CommandPalette />

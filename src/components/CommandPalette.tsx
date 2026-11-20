@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Search, X } from "lucide-react";
+import { optImg } from "@/lib/image-url";
 import { usePreferences } from "./PreferencesProvider";
 
 interface SearchPhoto {
@@ -267,7 +268,7 @@ export function CommandPalette() {
                   >
                     <div className="flex items-center gap-3 min-w-0">
                       {c.coverUrl && (
-                        <img src={c.coverUrl} alt="" className="h-7 w-10 shrink-0 rounded-[2px] object-cover" />
+                        <img src={optImg(c.coverUrl, 96, 75)} decoding="async" alt="" className="h-7 w-10 shrink-0 rounded-[2px] object-cover" />
                       )}
                       <span className="truncate font-medium text-[var(--fg)]">
                         {pick(c.title, c.titleEn)}
@@ -293,7 +294,7 @@ export function CommandPalette() {
                   }`}
                 >
                   <div className="flex items-center gap-3 min-w-0">
-                    <img src={p.url} alt="" className="h-7 w-10 shrink-0 rounded-[2px] object-cover" />
+                    <img src={optImg(p.url, 96, 75)} loading="lazy" decoding="async" alt="" className="h-7 w-10 shrink-0 rounded-[2px] object-cover" />
                     <span className="truncate font-medium text-[var(--fg)]">
                       {pick(p.title, p.titleEn)}
                     </span>

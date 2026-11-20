@@ -7,7 +7,7 @@ import {
 } from "@/lib/queries";
 import { HomeStageClient } from "@/components/HomeStageClient";
 
-export const dynamic = "force-dynamic";
+export const revalidate = 300;
 
 export default async function HomePage() {
   const [featuredPhotos, allPhotos, collections, collectionsMap, settings] = await Promise.all([

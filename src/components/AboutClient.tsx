@@ -23,6 +23,7 @@ import { SiteFooter } from "./SiteFooter";
 import { Reveal } from "./Reveal";
 import { ViewLink } from "./ViewLink";
 import { usePreferences } from "./PreferencesProvider";
+import { optImg } from "@/lib/image-url";
 
 export interface AboutFocusItem {
   icon: string;
@@ -142,7 +143,8 @@ export function AboutClient({ settings, photos, stats }: AboutClientProps) {
           <section className="surface-card flex flex-col lg:flex-row lg:items-center justify-between gap-6 sm:gap-8 rounded-xl p-5 sm:p-9">
             <div className="flex flex-col sm:flex-row sm:items-center gap-6">
               <img
-                src={avatarUrl}
+                src={optImg(avatarUrl, 384, 85)}
+                decoding="async"
                 alt={name}
                 className="h-24 w-24 sm:h-32 sm:w-32 shrink-0 rounded-full object-cover ring-1 ring-[var(--border)]"
               />

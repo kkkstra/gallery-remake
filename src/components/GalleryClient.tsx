@@ -26,6 +26,7 @@ import { SiteFooter } from "./SiteFooter";
 import { Lightbox } from "./Lightbox";
 import { GalleryImage } from "./GalleryImage";
 import { usePreferences } from "./PreferencesProvider";
+import { optImg } from "@/lib/image-url";
 import {
   CameraIllustration,
   LensIllustration,
@@ -720,7 +721,7 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
               const spacerGrow = needsSpacer ? Math.max(0, TARGET_ROW_RATIO - row.sum) : 0;
 
               return (
-                <div key={rIdx} className="flex flex-col sm:flex-row gap-2">
+                <div key={rIdx} className={`flex flex-col sm:flex-row gap-2 ${rIdx >= 2 ? "cv-auto" : ""}`}>
                   {row.items.map(({ photo, flatIdx }) => {
                     const ratio = Math.max(0.55, Math.min(2.4, (photo.width || 1600) / (photo.height || 1068)));
                     const title = pick(photo.title, photo.titleEn);
@@ -732,7 +733,7 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
                         data-ym={(photo.takenAt || "").slice(0, 7)}
                         onClick={() => setLightboxIdx(flatIdx)}
                         style={{ "--item-grow": ratio } as React.CSSProperties}
-                        className="group relative cursor-pointer will-change-transform hover:z-20 sm:[flex-basis:0%] sm:[flex-grow:var(--item-grow)]"
+                        className="group relative cursor-pointer hover:z-20 sm:[flex-basis:0%] sm:[flex-grow:var(--item-grow)]"
                       >
                         <GalleryImage
                           photoId={photo.id}
@@ -740,6 +741,7 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
                           alt={title}
                           ambient={photo.ambient}
                           blurData={photo.blurData}
+                          priority={rIdx === 0}
                           aspectRatio={`${photo.width || 1600} / ${photo.height || 1068}`}
                           className="w-full h-full"
                         />
@@ -787,7 +789,7 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
                     data-photo-id={photo.id}
                     data-ym={(photo.takenAt || "").slice(0, 7)}
                     onClick={() => setLightboxIdx(flatIdx)}
-                    className={`group relative flex flex-col cursor-pointer will-change-transform hover:z-20 ${
+                    className={`group relative flex flex-col cursor-pointer hover:z-20 ${
                       isPortrait ? "sm:row-span-2" : "sm:row-span-1"
                     }`}
                   >
@@ -797,6 +799,7 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
                       alt={title}
                       ambient={photo.ambient}
                       blurData={photo.blurData}
+                      priority={flatIdx < 4}
                       style={{ "--mobile-ar": `${photo.width || 1600} / ${photo.height || 1068}` } as React.CSSProperties}
                       className="flex-1 [aspect-ratio:var(--mobile-ar)] sm:[aspect-ratio:auto] sm:min-h-0"
                     />
@@ -832,7 +835,7 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
                     data-photo-id={photo.id}
                     data-ym={(photo.takenAt || "").slice(0, 7)}
                     onClick={() => setLightboxIdx(flatIdx)}
-                    className="group flex flex-col cursor-pointer will-change-transform"
+                    className="group flex flex-col cursor-pointer"
                   >
                     <div className="flex items-center justify-between pb-1.5 text-[10px] tracking-wider text-[var(--fg-subtle)]">
                       <span>#{String(flatIdx + 1).padStart(2, "0")}A</span>
@@ -841,9 +844,11 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
                     <div className="aspect-square flex items-center justify-center rounded-xs border border-[var(--border)] bg-[var(--bg-subtle)] p-2 sm:p-2.5 group-hover:border-[var(--fg-muted)] transition-colors">
                       <img
                         data-morph-photo-id={photo.id}
-                        src={photo.url}
+                        src={optImg(photo.url, 384, 75)}
+                        loading="lazy"
+                        decoding="async"
                         alt={title}
-                        className="max-h-full max-w-full object-contain transition-[scale,transform] duration-300 group-hover:scale-[1.04]"
+                        className="max-h-full max-w-full object-contain transition-transform duration-300 group-hover:scale-[1.04]"
                       />
                     </div>
                     <figcaption className="pt-1.5 truncate text-[11px] sm:text-xs text-[var(--fg-muted)] group-hover:text-[var(--fg)] transition-colors">

@@ -2,7 +2,7 @@ import { Suspense } from "react";
 import { getAllPhotos, getPhotoCollectionsMap, getSiteSettings } from "@/lib/queries";
 import { GalleryClient } from "@/components/GalleryClient";
 
-export const dynamic = "force-dynamic";
+export const revalidate = 300;
 
 export default async function GalleryPage() {
   const [photos, collectionsMap, settings] = await Promise.all([

@@ -1,7 +1,7 @@
 import { getCollectionsWithPhotos, getSiteSettings } from "@/lib/queries";
 import { CollectionsClient } from "@/components/CollectionsClient";
 
-export const dynamic = "force-dynamic";
+export const revalidate = 300;
 
 export default async function CollectionsPage() {
   const [collections, settings] = await Promise.all([

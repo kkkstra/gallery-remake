@@ -2,7 +2,7 @@ import { Suspense } from "react";
 import { getAllPhotos, getPhotoCollectionsMap, getSiteSettings } from "@/lib/queries";
 import { MapClient } from "@/components/MapClient";
 
-export const dynamic = "force-dynamic";
+export const revalidate = 300;
 
 export default async function MapPage() {
   const [photos, collectionsMap, settings] = await Promise.all([

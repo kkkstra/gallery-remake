@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { getAllPhotos, getPhotoCollectionsMap, getSiteSettings } from "@/lib/queries";
 import { PhotoDetailClient } from "@/components/PhotoDetailClient";
 
-export const dynamic = "force-dynamic";
+export const revalidate = 300;
 
 export async function generateMetadata({
   params,

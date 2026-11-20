@@ -3,12 +3,13 @@ import { NextResponse } from "next/server";
 import { isAdminAuthenticated } from "@/lib/auth";
 import { db, ensureDb } from "@/lib/db";
 import { collectionPhotos, photos } from "@/lib/db/schema";
+import { invalidateGalleryCache } from "@/lib/queries";
 import { extractExifFromBuffer } from "@/lib/exif";
 import { generateBlurDataUrl } from "@/lib/lqip";
 import { storeUploadedFile } from "@/lib/storage";
 
 export async function POST(req: Request) {
-  if (!(await isAdminAuthenticated())) {
+  if (!(await isAdminAuthenticated(req))) {
     return NextResponse.json({ error: "未授权" }, { status: 401 });
   }
   await ensureDb();
@@ -87,5 +88,6 @@ export async function POST(req: Request) {
       .onConflictDoNothing();
   }
 
+  invalidateGalleryCache();
   return NextResponse.json({ photo: created });
 }

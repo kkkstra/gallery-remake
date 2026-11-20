@@ -1,7 +1,7 @@
 import { getAllPhotos, getCollectionsWithPhotos, getSiteSettings } from "@/lib/queries";
 import { AboutClient } from "@/components/AboutClient";
 
-export const dynamic = "force-dynamic";
+export const revalidate = 300;
 
 export default async function AboutPage() {
   const [settings, photos, collections] = await Promise.all([

@@ -35,6 +35,7 @@ import {
 import type { Photo } from "@/lib/db/schema";
 import { ViewLink } from "./ViewLink";
 import { PrintCardModal } from "./PrintCardModal";
+import { optImg } from "@/lib/image-url";
 import { PhotoMiniMap } from "./PhotoMiniMap";
 import { usePreferences } from "./PreferencesProvider";
 
@@ -247,19 +248,19 @@ export function Lightbox({
       return;
     }
 
-    const nextUrl = photos[activeIndex]?.url;
+    const nextUrl = photos[activeIndex]?.url ? optImg(photos[activeIndex].url, 2048, 85) : undefined;
     if (lastLoadedUrlRef.current && lastLoadedUrlRef.current !== nextUrl) {
       setPrevPhotoUrl(lastLoadedUrlRef.current);
     }
 
-    // Silently warm up adjacent images (±1, +2) so switching has zero blank flash
+    // Silently warm up adjacent images (±1) at optimized stage size so switching has zero blank flash
     if (photos.length > 1) {
-      const offsets = [-1, 1, 2];
+      const offsets = [-1, 1];
       offsets.forEach((off) => {
         const target = photos[(activeIndex + off + photos.length) % photos.length];
         if (target?.url) {
           const pre = new Image();
-          pre.src = target.url;
+          pre.src = optImg(target.url, 2048, 85);
         }
       });
     }
@@ -452,7 +453,7 @@ export function Lightbox({
     setHist(null);
     const img = new Image();
     img.crossOrigin = "anonymous";
-    img.src = photo.url;
+    img.src = optImg(photo.url, 128, 75);
     img.onload = () => {
       if (cancelled) return;
       try {
@@ -879,16 +880,14 @@ export function Lightbox({
           onPointerLeave={() => setLoupePos(null)}
           className="relative flex flex-1 min-h-0 items-center justify-center overflow-hidden px-3 sm:px-20 py-2"
         >
-          {/* Subtle Restrained Stage Depth behind the Photograph */}
+          {/* Zero-Decode Ambient Stage Glow */}
           {!closing && (
-            <img
-              key={`glow-${photo.id}`}
-              src={photo.url}
-              alt=""
+            <div
               aria-hidden="true"
-              className={`pointer-events-none absolute inset-0 m-auto h-[64%] w-[64%] object-cover blur-[90px] saturate-125 transition-opacity duration-700 ${
-                isDark ? "opacity-14" : "opacity-12"
-              }`}
+              style={{
+                background: `radial-gradient(ellipse 58% 58% at 50% 50%, ${photo.ambient || "#334155"}38 0%, transparent 72%)`,
+              }}
+              className="pointer-events-none absolute inset-0"
             />
           )}
 
@@ -930,11 +929,12 @@ export function Lightbox({
             <img
               ref={mainImgRef}
               key={photo.id}
-              src={photo.url}
+              src={optImg(photo.url, 2048, 85)}
+              decoding="async"
               alt={title}
               draggable={false}
               onLoad={() => {
-                lastLoadedUrlRef.current = photo.url;
+                lastLoadedUrlRef.current = optImg(photo.url, 2048, 85);
                 setPrevPhotoUrl(null);
               }}
               onPointerDown={handlePointerDown}
@@ -967,7 +967,7 @@ export function Lightbox({
                 width: LOUPE_SIZE,
                 height: LOUPE_SIZE,
                 transform: `translate3d(${loupePos.stageX}px, ${loupePos.stageY}px, 0)`,
-                backgroundImage: `url(${photo.url})`,
+                backgroundImage: `url(${optImg(photo.url, 3840, 85)})`,
                 backgroundRepeat: "no-repeat",
                 backgroundSize: `${loupePos.bgW}px ${loupePos.bgH}px`,
                 backgroundPosition: `${loupePos.bgX}px ${loupePos.bgY}px`,
@@ -1045,7 +1045,13 @@ export function Lightbox({
                         active ? "opacity-100 ring-2 ring-[var(--fg)]" : "opacity-40 hover:opacity-80"
                       }`}
                     >
-                      <img src={item.url} alt={item.title} className="h-full w-full object-cover" />
+                      <img
+                        src={optImg(item.url, 128, 75)}
+                        loading="lazy"
+                        decoding="async"
+                        alt={item.title}
+                        className="h-full w-full object-cover"
+                      />
                     </button>
                   );
                 })}

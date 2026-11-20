@@ -11,6 +11,7 @@ import { Lightbox } from "./Lightbox";
 import { Reveal } from "./Reveal";
 import { GalleryImage } from "./GalleryImage";
 import { ViewLink } from "./ViewLink";
+import { optImg, optSrcSet } from "@/lib/image-url";
 import { usePreferences } from "./PreferencesProvider";
 
 interface CollectionDetailClientProps {
@@ -186,11 +187,15 @@ export function CollectionDetailClient({
           }`}
         >
           <img
-            src={block.imageUrl}
+            src={optImg(block.imageUrl, 1920, 85)}
+            srcSet={optSrcSet(block.imageUrl, [828, 1200, 1920, 2048], 85)}
+            sizes="100vw"
+            fetchPriority={isFirstCover ? "high" : undefined}
+            loading={isFirstCover ? "eager" : "lazy"}
+            decoding="async"
             alt={cTitle}
             draggable={!copyrightGuard}
             onContextMenu={(e) => copyrightGuard && e.preventDefault()}
-            style={isFirstCover ? { viewTransitionName: `series-cover-${collection.slug}` } : undefined}
             className="absolute inset-0 h-full w-full object-cover opacity-80 animate-hero-breath"
           />
           <div
@@ -243,7 +248,9 @@ export function CollectionDetailClient({
             <div className="surface-card grid grid-cols-1 lg:grid-cols-12 overflow-hidden rounded-lg">
               <div className="lg:col-span-7 relative min-h-[280px] sm:min-h-[380px] overflow-hidden bg-[var(--bg-subtle)]">
                 <img
-                  src={block.imageUrl}
+                  src={optImg(block.imageUrl, 1200, 85)}
+                  loading="lazy"
+                  decoding="async"
                   alt={cTitle}
                   draggable={!copyrightGuard}
                   onContextMenu={(e) => copyrightGuard && e.preventDefault()}
@@ -485,9 +492,11 @@ export function CollectionDetailClient({
                 >
                   {nextCollection.coverUrl && (
                     <img
-                      src={nextCollection.coverUrl}
+                      src={optImg(nextCollection.coverUrl, 1200, 85)}
+                      loading="lazy"
+                      decoding="async"
                       alt={pick(nextCollection.title, nextCollection.titleEn)}
-                      className="h-full w-full object-cover opacity-72 transition-[scale,transform] duration-700 ease-out group-hover:scale-[1.03]"
+                      className="h-full w-full object-cover opacity-72 transition-transform duration-700 ease-out group-hover:scale-[1.03]"
                     />
                   )}
                   <div

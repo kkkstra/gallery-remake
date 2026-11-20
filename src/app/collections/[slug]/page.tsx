@@ -2,7 +2,7 @@ import { notFound } from "next/navigation";
 import { getCollectionsWithPhotos, getPhotoCollectionsMap, getSiteSettings } from "@/lib/queries";
 import { CollectionDetailClient } from "@/components/CollectionDetailClient";
 
-export const dynamic = "force-dynamic";
+export const revalidate = 300;
 
 export default async function CollectionDetailPage({
   params,

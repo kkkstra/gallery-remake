@@ -1,5 +1,5 @@
 import { isAdminAuthenticated } from "@/lib/auth";
-import { getAllGear, getAllPhotos, getCollectionsWithPhotos, getSiteSettings } from "@/lib/queries";
+import { fetchSiteSettingsFresh, getAllGear, getAllPhotos, getCollectionsWithPhotos } from "@/lib/queries";
 import { getStorageMode } from "@/lib/storage";
 import { AdminClient } from "@/components/AdminClient";
 
@@ -25,7 +25,7 @@ export default async function AdminPage() {
     getAllPhotos({ includeHidden: true }),
     getCollectionsWithPhotos({ includeHidden: true }),
     getAllGear({ includeHidden: true }),
-    getSiteSettings(),
+    fetchSiteSettingsFresh(),
   ]);
 
   return (

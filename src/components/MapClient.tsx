@@ -11,6 +11,7 @@ import { SiteFooter } from "./SiteFooter";
 import { Lightbox } from "./Lightbox";
 import { GalleryImage } from "./GalleryImage";
 import { loadCompliantMapStyle } from "@/lib/compliant-map-style";
+import { optImg } from "@/lib/image-url";
 import { usePreferences } from "./PreferencesProvider";
 
 interface MapClientProps {
@@ -546,7 +547,8 @@ export function MapClient({ photos, collectionsMap, settings }: MapClientProps) 
         "position:relative;display:block;width:40px;height:40px;padding:0;border-radius:4px;cursor:pointer;background:#14161d;transition:transform 200ms cubic-bezier(0.22,1,0.36,1),box-shadow 200ms ease;";
 
       const img = document.createElement("img");
-      img.src = cover.url;
+      img.src = optImg(cover.url, 128, 75);
+      img.decoding = "async";
       img.alt = "";
       img.style.cssText =
         "width:100%;height:100%;object-fit:cover;border-radius:3px;display:block;pointer-events:none;";
@@ -773,7 +775,9 @@ export function MapClient({ photos, collectionsMap, settings }: MapClientProps) 
                         <div className="flex items-center gap-3.5 min-w-0">
                           <div className="photo-frame h-10 w-14 shrink-0 overflow-hidden rounded-xs">
                             <img
-                              src={cover.url}
+                              src={optImg(cover.url, 128, 75)}
+                              loading="lazy"
+                              decoding="async"
                               alt=""
                               className="h-full w-full object-cover transition duration-300 group-hover:scale-105"
                             />

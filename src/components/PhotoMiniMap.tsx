@@ -6,6 +6,7 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import { ArrowUpRight } from "lucide-react";
 import { ViewLink } from "./ViewLink";
 import { loadCompliantMapStyle } from "@/lib/compliant-map-style";
+import { optImg } from "@/lib/image-url";
 import { usePreferences } from "./PreferencesProvider";
 
 interface PhotoMiniMapProps {
@@ -92,7 +93,8 @@ export function PhotoMiniMap({ photoId, lat, lng, photoUrl, onNavigate }: PhotoM
       pin.style.cssText =
         "width:30px;height:30px;border-radius:4px;overflow:hidden;background:#14161d;box-shadow:0 0 0 2px #f4f5f7,0 6px 16px rgba(0,0,0,0.55);";
       const img = document.createElement("img");
-      img.src = photoUrl;
+      img.src = optImg(photoUrl, 96, 75);
+      img.decoding = "async";
       img.alt = "";
       img.style.cssText = "width:100%;height:100%;object-fit:cover;display:block;";
       pin.appendChild(img);

@@ -6,6 +6,7 @@ import { SiteHeader } from "./SiteHeader";
 import { SiteFooter } from "./SiteFooter";
 import { Reveal } from "./Reveal";
 import { ViewLink } from "./ViewLink";
+import { optImg, optSrcSet } from "@/lib/image-url";
 import { usePreferences } from "./PreferencesProvider";
 
 interface CollectionsClientProps {
@@ -79,9 +80,12 @@ export function CollectionsClient({ collections, settings }: CollectionsClientPr
                         className="group photo-frame block overflow-hidden bg-[var(--bg-elevated)]"
                       >
                         <img
-                          src={col.coverUrl}
+                          src={optImg(col.coverUrl, 1200, 85)}
+                          srcSet={optSrcSet(col.coverUrl, [640, 828, 1200, 1920], 85)}
+                          sizes="(max-width: 1024px) 96vw, 66vw"
+                          loading={idx === 0 ? "eager" : "lazy"}
+                          decoding="async"
                           alt={title}
-                          style={{ viewTransitionName: `series-cover-${col.slug}` }}
                           className="w-full max-h-[54vh] object-cover transition duration-700 ease-out group-hover:scale-[1.025]"
                         />
                       </ViewLink>
@@ -94,7 +98,13 @@ export function CollectionsClient({ collections, settings }: CollectionsClientPr
                             href={`/collections/${col.slug}`}
                             className="photo-frame aspect-[3/2] overflow-hidden opacity-80 hover:opacity-100 transition"
                           >
-                            <img src={p.url} alt={p.title} className="h-full w-full object-cover" />
+                            <img
+                              src={optImg(p.url, 384, 75)}
+                              loading="lazy"
+                              decoding="async"
+                              alt={p.title}
+                              className="h-full w-full object-cover"
+                            />
                           </ViewLink>
                         ))}
                       </div>

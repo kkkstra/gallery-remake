@@ -10,6 +10,7 @@ import { Lightbox } from "./Lightbox";
 import { Reveal } from "./Reveal";
 import { GalleryImage } from "./GalleryImage";
 import { ViewLink } from "./ViewLink";
+import { optImg, optSrcSet } from "@/lib/image-url";
 import { usePreferences } from "./PreferencesProvider";
 
 interface HomeStageClientProps {
@@ -139,9 +140,13 @@ export function HomeStageClient({
         className="group relative h-[76dvh] sm:h-[86dvh] w-full overflow-hidden bg-black select-none"
       >
 
-        <div ref={heroParallaxRef} className="absolute inset-0 will-change-transform">
+        <div ref={heroParallaxRef} className="absolute inset-0">
           {slides.map((s, i) => {
             const isCurrent = i === index;
+            const isAdjacent =
+              slides.length > 1 &&
+              (i === (index + 1) % slides.length || i === (index - 1 + slides.length) % slides.length);
+            if (!isCurrent && !isAdjacent) return null;
             return (
               <div
                 key={s.id}
@@ -152,7 +157,11 @@ export function HomeStageClient({
                 <img
                   key={isCurrent ? `active-${s.id}` : `idle-${s.id}`}
                   data-morph-photo-id={isCurrent ? s.id : undefined}
-                  src={s.url}
+                  src={optImg(s.url, 1920, 85)}
+                  srcSet={optSrcSet(s.url, [828, 1200, 1920, 2048], 85)}
+                  sizes="100vw"
+                  fetchPriority={isCurrent ? "high" : "low"}
+                  decoding="async"
                   alt={pick(s.title, s.titleEn)}
                   onClick={() => openFromList(activeSlide, slides)}
                   className={`h-full w-full object-cover cursor-zoom-in ${
@@ -259,21 +268,15 @@ export function HomeStageClient({
                     className="group relative isolate block space-y-2 hover:z-20"
                   >
                     <div className="relative aspect-[16/10]">
-                      {col.coverUrl && (
-                        <img
-                          src={col.coverUrl}
-                          alt=""
-                          aria-hidden="true"
-                          decoding="async"
-                          className="ambient-photo-halo pointer-events-none absolute -inset-2 -z-10 h-[calc(100%+16px)] w-[calc(100%+16px)] max-w-none rounded-xl object-cover"
-                        />
-                      )}
                       <div className="photo-frame relative h-full w-full overflow-hidden bg-[var(--bg-elevated)]">
                         {col.coverUrl && (
                           <img
-                            src={col.coverUrl}
+                            src={optImg(col.coverUrl, 828, 85)}
+                            srcSet={optSrcSet(col.coverUrl, [640, 828, 1200], 85)}
+                            sizes="(max-width: 768px) 96vw, 33vw"
+                            loading="lazy"
+                            decoding="async"
                             alt={cTitle}
-                            style={{ viewTransitionName: `series-cover-${col.slug}` }}
                             className="h-full w-full object-cover transition duration-700 ease-out group-hover:scale-[1.035]"
                           />
                         )}
@@ -293,7 +296,13 @@ export function HomeStageClient({
                             key={p.id}
                             className="photo-frame aspect-[3/2] overflow-hidden bg-[var(--bg-elevated)] opacity-80 group-hover:opacity-100 transition"
                           >
-                            <img src={p.url} alt={p.title} className="h-full w-full object-cover" />
+                            <img
+                              src={optImg(p.url, 256, 75)}
+                              loading="lazy"
+                              decoding="async"
+                              alt={p.title}
+                              className="h-full w-full object-cover"
+                            />
                           </div>
                         ))}
                       </div>

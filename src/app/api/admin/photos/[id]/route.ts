@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 import { isAdminAuthenticated } from "@/lib/auth";
 import { db, ensureDb } from "@/lib/db";
 import { collectionPhotos, photos } from "@/lib/db/schema";
+import { invalidateGalleryCache } from "@/lib/queries";
 
 export async function GET(
   req: Request,
@@ -79,20 +80,22 @@ export async function PATCH(
     }
   }
 
+  invalidateGalleryCache();
   const updated = await db.select().from(photos).where(eq(photos.id, id)).get();
   return NextResponse.json({ photo: updated });
 }
 
 export async function DELETE(
-  _req: Request,
+  req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  if (!(await isAdminAuthenticated())) {
+  if (!(await isAdminAuthenticated(req))) {
     return NextResponse.json({ error: "未授权" }, { status: 401 });
   }
   await ensureDb();
   const id = Number((await params).id);
   await db.delete(collectionPhotos).where(eq(collectionPhotos.photoId, id));
   await db.delete(photos).where(eq(photos.id, id));
+  invalidateGalleryCache();
   return NextResponse.json({ ok: true });
 }
