@@ -98,7 +98,7 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
   const initialView: "mosaic" | "index" | "sheet" =
     qView === "index" ? "index" : qView === "sheet" ? "sheet" : "mosaic";
   const initialSort: "time" | "recommended" =
-    searchParams.get("sort") === "recommended" ? "recommended" : "time";
+    searchParams.get("sort") === "time" ? "time" : "recommended";
 
   const [category, setCategoryState] = useState(initialCat);
   const [camera, setCameraState] = useState(initialCamera);
@@ -271,18 +271,17 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
   }, [camera, category, gearTab, photos]);
 
   const filtered = useMemo(() => {
-    return photos
-      .filter((p) => {
-        if (category !== "all" && p.category !== category) return false;
-        if (camera !== "all" && p.camera !== camera) return false;
-        if (lens !== "all" && p.lens !== lens) return false;
-        return true;
-      })
-      .sort((a, b) =>
-        sortBy === "time"
-          ? (b.takenAt || "").localeCompare(a.takenAt || "") || a.sortOrder - b.sortOrder || b.id - a.id
-          : a.sortOrder - b.sortOrder || b.id - a.id
-      );
+    const base = photos.filter((p) => {
+      if (category !== "all" && p.category !== category) return false;
+      if (camera !== "all" && p.camera !== camera) return false;
+      if (lens !== "all" && p.lens !== lens) return false;
+      return true;
+    });
+    if (sortBy === "recommended") return base;
+    return [...base].sort(
+      (a, b) =>
+        (b.takenAt || "").localeCompare(a.takenAt || "") || a.sortOrder - b.sortOrder || b.id - a.id
+    );
   }, [camera, category, lens, photos, sortBy]);
 
   // Sync URL query params (e.g. when jumping from Global ⌘K Search)
@@ -296,11 +295,15 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
       setCategoryState("all");
       setCameraState("all");
       setLensState("all");
-      const sortedAll = [...photos].sort((a, b) =>
-        sortBy === "time"
-          ? (b.takenAt || "").localeCompare(a.takenAt || "") || a.sortOrder - b.sortOrder || b.id - a.id
-          : a.sortOrder - b.sortOrder || b.id - a.id
-      );
+      const sortedAll =
+        sortBy === "recommended"
+          ? photos
+          : [...photos].sort(
+              (a, b) =>
+                (b.takenAt || "").localeCompare(a.takenAt || "") ||
+                a.sortOrder - b.sortOrder ||
+                b.id - a.id
+            );
       const { lightboxPhotos: orderedLb } = collapsePhotoListForDisplay(sortedAll);
       const idx = orderedLb.findIndex((p) => p.id === qPhotoId);
       if (idx >= 0) setLightboxIdx(idx);
@@ -487,24 +490,13 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
 
           {/* Mobile Row 2 / Desktop Right: Sort Switcher + Gear Filter + View Switcher */}
           <div className="flex w-full sm:w-auto shrink-0 items-center justify-between sm:justify-end gap-2 sm:gap-2.5">
-            {/* Chronological Time (Default) vs Recommended Sort Toggle */}
+            {/* Recommended (Default) vs Chronological Time Sort Toggle */}
             <div
               role="group"
               aria-label={locale === "en" ? "Sort order" : "排序方式"}
               className="inline-flex items-center rounded-md border border-[var(--border)] bg-[var(--bg-elevated)] p-0.5 text-xs"
             >
               <ArrowDownUp className="ml-1.5 mr-1 h-3.5 w-3.5 text-[var(--fg-subtle)] shrink-0" />
-              <button
-                type="button"
-                onClick={() => changeSort("time")}
-                className={`rounded px-2 py-1 transition cursor-pointer ${
-                  sortBy === "time"
-                    ? "bg-[var(--fg)] text-[var(--bg)] font-medium"
-                    : "text-[var(--fg-muted)] hover:text-[var(--fg)]"
-                }`}
-              >
-                {locale === "en" ? "Latest" : "时间"}
-              </button>
               <button
                 type="button"
                 onClick={() => changeSort("recommended")}
@@ -515,6 +507,17 @@ export function GalleryClient({ photos, collectionsMap, settings }: GalleryClien
                 }`}
               >
                 {locale === "en" ? "Recommended" : "推荐"}
+              </button>
+              <button
+                type="button"
+                onClick={() => changeSort("time")}
+                className={`rounded px-2 py-1 transition cursor-pointer ${
+                  sortBy === "time"
+                    ? "bg-[var(--fg)] text-[var(--bg)] font-medium"
+                    : "text-[var(--fg-muted)] hover:text-[var(--fg)]"
+                }`}
+              >
+                {locale === "en" ? "Latest" : "时间"}
               </button>
             </div>
 

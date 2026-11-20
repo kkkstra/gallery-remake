@@ -63,12 +63,6 @@ export async function getPhotoById(id: number, opts?: { includeHidden?: boolean 
   return all.find((p) => p.id === id) ?? null;
 }
 
-export async function getFeaturedPhotos(): Promise<Photo[]> {
-  const all = await getCachedPublicPhotos();
-  const featured = all.filter((p) => p.featured);
-  return featured.length > 0 ? featured : all.slice(0, 8);
-}
-
 async function fetchCollectionsBundleRaw(includeHidden: boolean) {
   await ensureDb();
   const [cols, links, allPhotos] = await Promise.all([

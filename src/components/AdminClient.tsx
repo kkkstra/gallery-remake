@@ -34,7 +34,6 @@ import {
   Rows3,
   Search,
   Settings,
-  Star,
   Sun,
   Terminal,
   Trash2,
@@ -169,8 +168,11 @@ export function AdminClient({
   const [photoList, setPhotoList] = useState<Photo[]>(initialPhotos);
   const [colList, setColList] = useState<CollectionWithPhotos[]>(initialCollections);
   const [searchQuery, setSearchQuery] = useState("");
-  const [quickFilter, setQuickFilter] = useState<"all" | "featured" | "nogps" | "unassigned" | string>("all");
+  const [quickFilter, setQuickFilter] = useState<"all" | "nogps" | "unassigned" | string>("all");
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
+  const [expandedGroupIds, setExpandedGroupIds] = useState<string[]>([]);
+  const [dragOverPhotoId, setDragOverPhotoId] = useState<number | null>(null);
+  const dragInspFrameIdxRef = useRef<number | null>(null);
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [uploadDrawerOpen, setUploadDrawerOpen] = useState(initialPhotos.length === 0);
   const [uploadSubTab, setUploadSubTab] = useState<"file" | "url">("file");
@@ -182,7 +184,6 @@ export function AdminClient({
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState("");
   const [batchCategory, setBatchCategory] = useState("landscape");
-  const [batchFeatured, setBatchFeatured] = useState(true);
   const [batchHidden, setBatchHidden] = useState(false);
   const [batchColId, setBatchColId] = useState("0");
   const [batchAsGroup, setBatchAsGroup] = useState(false);
@@ -322,23 +323,28 @@ export function AdminClient({
   }, [initialGear, photoList]);
 
   const adminGroupMap = useMemo(() => buildGroupMap(photoList), [photoList]);
-  const groupSeriesCount = useMemo(
-    () => new Set(Array.from(adminGroupMap.values()).map((g) => g.groupId)).size,
+  const allAdminGroupIds = useMemo(
+    () => Array.from(new Set(Array.from(adminGroupMap.values()).map((g) => g.groupId))),
     [adminGroupMap]
   );
+  const groupSeriesCount = allAdminGroupIds.length;
+  const expandedGroupSet = useMemo(
+    () => new Set(expandedGroupIds.filter((gid) => allAdminGroupIds.includes(gid))),
+    [allAdminGroupIds, expandedGroupIds]
+  );
+  const allGroupsExpanded =
+    allAdminGroupIds.length > 0 && expandedGroupSet.size === allAdminGroupIds.length;
 
   // Filtered photos in Library
   const filteredPhotos = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return photoList.filter((p) => {
-      if (quickFilter === "featured" && !p.featured) return false;
       if (quickFilter === "hidden" && !p.hidden) return false;
       if (quickFilter === "grouped" && !adminGroupMap.has(p.id)) return false;
       if (quickFilter === "nogps" && p.lat !== null && p.lng !== null) return false;
       if (quickFilter === "unassigned" && assignedPhotoIds.has(p.id)) return false;
       if (
         quickFilter !== "all" &&
-        quickFilter !== "featured" &&
         quickFilter !== "hidden" &&
         quickFilter !== "grouped" &&
         quickFilter !== "nogps" &&
@@ -354,6 +360,17 @@ export function AdminClient({
         .includes(q);
     });
   }, [adminGroupMap, assignedPhotoIds, photoList, quickFilter, searchQuery]);
+
+  const visibleLibraryPhotos = useMemo(() => {
+    if (allAdminGroupIds.length === 0) return filteredPhotos;
+    const seenCollapsed = new Set<string>();
+    return filteredPhotos.filter((p) => {
+      if (!p.groupId || expandedGroupSet.has(p.groupId) || !adminGroupMap.has(p.id)) return true;
+      if (seenCollapsed.has(p.groupId)) return false;
+      seenCollapsed.add(p.groupId);
+      return true;
+    });
+  }, [adminGroupMap, allAdminGroupIds.length, expandedGroupSet, filteredPhotos]);
 
   const handleFiles = useCallback(
     async (files: FileList | File[]) => {
@@ -376,7 +393,6 @@ export function AdminClient({
         done += 1;
         setUploadProgress(`正在上传并解析 EXIF (${done}/${arr.length}) · ${file.name}`);
         const meta = await analyzeImageFile(file);
-        const frameFeatured = isGroupedUpload ? batchFeatured && done === 1 : batchFeatured;
 
         // When S3/R2 is active, try direct browser-to-R2 presigned PUT first (bypasses Vercel 4.5MB limit for 50MB+ photos!)
         let uploadedViaPresign = false;
@@ -415,7 +431,6 @@ export function AdminClient({
                     ambient: meta.ambient,
                     blurData: meta.blurData,
                     category: batchCategory,
-                    featured: frameFeatured,
                     hidden: batchHidden,
                     groupId: sharedGroupId,
                     groupOrder: isGroupedUpload ? done : 0,
@@ -449,7 +464,6 @@ export function AdminClient({
           fd.append("height", String(meta.height));
           fd.append("ambient", meta.ambient);
           fd.append("category", batchCategory);
-          fd.append("featured", String(frameFeatured));
           fd.append("hidden", String(batchHidden));
           if (isGroupedUpload) {
             fd.append("title", groupBaseTitle);
@@ -477,7 +491,6 @@ export function AdminClient({
       batchAsGroup,
       batchCategory,
       batchColId,
-      batchFeatured,
       batchGeo,
       batchGroupMeta,
       batchHidden,
@@ -656,7 +669,6 @@ export function AdminClient({
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         ...extPhoto,
-        featured: batchFeatured,
         hidden: batchHidden,
         collectionIds: Number(batchColId) > 0 ? [Number(batchColId)] : [],
       }),
@@ -704,6 +716,55 @@ export function AdminClient({
     persistPhotoOrder(blocks.flat());
   };
 
+  const moveBlockToTop = (photoId: number, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    const blocks = partitionContiguousBlocks(photoList);
+    const bIdx = blocks.findIndex((b) => b.some((p) => p.id === photoId));
+    if (bIdx <= 0) return;
+    const [block] = blocks.splice(bIdx, 1);
+    blocks.unshift(block);
+    persistPhotoOrder(blocks.flat());
+  };
+
+  const toggleSingleGroupExpand = (groupId: string, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    setExpandedGroupIds((prev) =>
+      prev.includes(groupId) ? prev.filter((g) => g !== groupId) : [...prev, groupId]
+    );
+  };
+
+  const applyGroupOrderOptimistic = async (reorderedSiblings: Photo[], focusId?: number) => {
+    if (reorderedSiblings.length < 2) return;
+    const gid = reorderedSiblings[0].groupId;
+    const updatedSibs = reorderedSiblings.map((s, idx) => ({ ...s, groupOrder: idx + 1 }));
+    setPhotoList((prev) => {
+      const out: Photo[] = [];
+      let inserted = false;
+      for (const p of prev) {
+        if (p.groupId === gid) {
+          if (!inserted) {
+            out.push(...updatedSibs);
+            inserted = true;
+          }
+        } else {
+          out.push(p);
+        }
+      }
+      return out;
+    });
+    if (focusId) {
+      const f = updatedSibs.find((s) => s.id === focusId);
+      if (f) setEditingPhoto({ ...f });
+    }
+    await fetch("/api/admin/photos", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "group_reorder", ids: updatedSibs.map((s) => s.id) }),
+    });
+    notify("组内顺序已更新");
+    router.refresh();
+  };
+
   const handleLibraryPhotoDrop = async (fromIdx: number, toIdx: number) => {
     if (fromIdx < 0 || toIdx < 0 || fromIdx === toIdx) return;
     const moved = photoList[fromIdx];
@@ -718,13 +779,7 @@ export function AdminClient({
       if (f < 0 || t < 0 || f === t) return;
       const [item] = sibs.splice(f, 1);
       sibs.splice(t, 0, item);
-      await fetch("/api/admin/photos", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "group_reorder", ids: sibs.map((s) => s.id) }),
-      });
-      await refreshAdminPhotos(moved.id);
-      notify("组内顺序已更新");
+      await applyGroupOrderOptimistic(sibs, moved.id);
       return;
     }
 
@@ -812,19 +867,6 @@ export function AdminClient({
     router.refresh();
   };
 
-  const toggleFeatured = async (photo: Photo, e?: React.MouseEvent) => {
-    e?.stopPropagation();
-    const nextVal = !photo.featured;
-    setPhotoList((prev) => prev.map((p) => (p.id === photo.id ? { ...p, featured: nextVal } : p)));
-    if (editingPhoto?.id === photo.id) setEditingPhoto({ ...editingPhoto, featured: nextVal });
-    await fetch(`/api/admin/photos/${photo.id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ featured: nextVal }),
-    });
-    router.refresh();
-  };
-
   const toggleHidden = async (photo: Photo, e?: React.MouseEvent) => {
     e?.stopPropagation();
     const nextVal = !photo.hidden;
@@ -851,7 +893,6 @@ export function AdminClient({
   const runBatchAction = async (
     action:
       | "category"
-      | "featured"
       | "hidden"
       | "collection"
       | "delete"
@@ -922,13 +963,7 @@ export function AdminClient({
     if (idx < 0 || nextIdx < 0 || nextIdx >= siblings.length) return;
     const reordered = [...siblings];
     [reordered[idx], reordered[nextIdx]] = [reordered[nextIdx], reordered[idx]];
-    await fetch("/api/admin/photos", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "group_reorder", ids: reordered.map((s) => s.id) }),
-    });
-    await refreshAdminPhotos(currId);
-    notify("组内顺序已调整");
+    await applyGroupOrderOptimistic(reordered, currId);
   };
 
   const detachFrameFromGroup = async (photoId: number) => {
@@ -1274,7 +1309,6 @@ export function AdminClient({
   };
 
   const photoMap = new Map(photoList.map((p) => [p.id, p]));
-  const featuredCount = photoList.filter((p) => p.featured).length;
   const hiddenCount = photoList.filter((p) => p.hidden).length;
   const noGpsCount = photoList.filter((p) => p.lat === null || p.lng === null).length;
   const unassignedCount = photoList.filter((p) => !assignedPhotoIds.has(p.id)).length;
@@ -1475,7 +1509,6 @@ export function AdminClient({
                 {(
                   [
                     ["all", `全部 ${photoList.length}`],
-                    ["featured", `★ 精选 ${featuredCount}`],
                     ...(groupSeriesCount > 0 || quickFilter === "grouped"
                       ? [["grouped", `组图 ${groupSeriesCount}`]]
                       : []),
@@ -1505,6 +1538,22 @@ export function AdminClient({
             </div>
 
             <div className="flex items-center gap-2">
+              {allAdminGroupIds.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setExpandedGroupIds(allGroupsExpanded ? [] : allAdminGroupIds)}
+                  title={allGroupsExpanded ? "收起全部组图（收起后可整组整体移动）" : "展开全部组图"}
+                  className={`inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium transition cursor-pointer ${
+                    allGroupsExpanded
+                      ? "border-[var(--fg)] bg-[var(--bg-subtle)] text-[var(--fg)]"
+                      : "border-[var(--border)] text-[var(--fg-muted)] hover:text-[var(--fg)]"
+                  }`}
+                >
+                  <Layers className="h-3.5 w-3.5" />
+                  <span>{allGroupsExpanded ? "收起组图" : "展开组图"}</span>
+                </button>
+              )}
+
               <button
                 type="button"
                 onClick={() => setUploadDrawerOpen((v) => !v)}
@@ -1601,14 +1650,6 @@ export function AdminClient({
                         </option>
                       ))}
                     </select>
-                  </label>
-                  <label className="inline-flex items-center gap-1.5 cursor-pointer text-[var(--fg)]">
-                    <input
-                      type="checkbox"
-                      checked={batchFeatured}
-                      onChange={(e) => setBatchFeatured(e.target.checked)}
-                    />
-                    <span>设为首页精选</span>
                   </label>
                   <label className="inline-flex items-center gap-1.5 cursor-pointer text-[var(--fg)]">
                     <input
@@ -1841,42 +1882,78 @@ export function AdminClient({
                       : "grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5"
                   }`}
                 >
-                  {filteredPhotos.map((photo) => {
+                  {visibleLibraryPhotos.map((photo) => {
                     const realIdx = photoList.findIndex((p) => p.id === photo.id);
-                    const checked = selectedIds.includes(photo.id);
-                    const inspecting = editingPhoto?.id === photo.id;
                     const gInfo = adminGroupMap.get(photo.id);
-                    const displayTitle = formatNumberedTitle(photo.title, gInfo);
+                    const isGroupCollapsed = Boolean(gInfo && !expandedGroupSet.has(gInfo.groupId));
+                    const groupSibIds = gInfo ? gInfo.siblings.map((s) => s.id) : [photo.id];
+                    const checked = isGroupCollapsed
+                      ? groupSibIds.every((id) => selectedIds.includes(id))
+                      : selectedIds.includes(photo.id);
+                    const inspecting = isGroupCollapsed
+                      ? groupSibIds.includes(editingPhoto?.id ?? -1)
+                      : editingPhoto?.id === photo.id;
+                    const displayTitle = isGroupCollapsed
+                      ? photo.title
+                      : formatNumberedTitle(photo.title, gInfo);
+                    const canReorder = quickFilter === "all" && !searchQuery;
+                    const blockFirstIdx = gInfo
+                      ? photoList.findIndex((p) => p.id === gInfo.siblings[0].id)
+                      : realIdx;
+                    const blockLastIdx = gInfo
+                      ? photoList.findIndex((p) => p.id === gInfo.siblings[gInfo.siblings.length - 1].id)
+                      : realIdx;
+                    const canMovePrev =
+                      gInfo && !isGroupCollapsed ? gInfo.index > 1 : blockFirstIdx > 0;
+                    const canMoveNext =
+                      gInfo && !isGroupCollapsed
+                        ? gInfo.index < gInfo.total
+                        : blockLastIdx >= 0 && blockLastIdx < photoList.length - 1;
+
                     return (
                       <div
                         key={photo.id}
-                        draggable={quickFilter === "all" && !searchQuery}
+                        draggable={canReorder}
                         onDragStart={() => {
                           dragPhotoIdxRef.current = realIdx;
                         }}
-                        onDragOver={(e) => e.preventDefault()}
+                        onDragEnd={() => {
+                          dragPhotoIdxRef.current = null;
+                          setDragOverPhotoId(null);
+                        }}
+                        onDragOver={(e) => {
+                          e.preventDefault();
+                          if (dragOverPhotoId !== photo.id) setDragOverPhotoId(photo.id);
+                        }}
+                        onDragLeave={() => {
+                          if (dragOverPhotoId === photo.id) setDragOverPhotoId(null);
+                        }}
                         onDrop={() => {
                           const from = dragPhotoIdxRef.current;
                           dragPhotoIdxRef.current = null;
+                          setDragOverPhotoId(null);
                           if (from === null || from === realIdx || realIdx < 0) return;
                           handleLibraryPhotoDrop(from, realIdx);
                         }}
                         onClick={() => selectInspectorPhoto(photo)}
                         className={`surface-card group relative overflow-hidden rounded-lg cursor-pointer transition ${
-                          inspecting
+                          dragOverPhotoId === photo.id
+                            ? "ring-2 ring-emerald-400 scale-[0.99]"
+                            : inspecting
                             ? "ring-2 ring-[var(--fg)]"
                             : checked
                             ? "ring-1 ring-[var(--fg-muted)]"
                             : "hover:border-[var(--fg-muted)]"
-                        }`}
+                        } ${isGroupCollapsed ? "shadow-[0_4px_0_-2px_var(--border),0_8px_0_-4px_var(--border)]" : ""}`}
                       >
                         <div className="relative aspect-[3/2] bg-[var(--bg-subtle)] overflow-hidden">
                           <img
                             src={optImg(photo.url, 384, 75)}
                             loading="lazy"
                             decoding="async"
+                            draggable={false}
                             alt={photo.title}
-                            className={`h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.03] ${
+                            className={`h-full w-full object-cover select-none transition-transform duration-300 group-hover:scale-[1.03] ${
                               photo.hidden ? "opacity-45 grayscale-[35%]" : ""
                             }`}
                           />
@@ -1886,10 +1963,19 @@ export function AdminClient({
                             </span>
                           )}
                           {gInfo && (
-                            <span className="pointer-events-none absolute bottom-2 right-2 inline-flex items-center gap-1 rounded bg-black/65 px-1.5 py-0.5 text-[10px] font-medium text-white backdrop-blur-sm">
+                            <button
+                              type="button"
+                              onClick={(e) => toggleSingleGroupExpand(gInfo.groupId, e)}
+                              title={isGroupCollapsed ? "点击展开该组全部照片" : "点击收起该组（整组整体移动）"}
+                              className="absolute bottom-2 right-2 inline-flex items-center gap-1 rounded bg-black/72 px-1.5 py-0.5 text-[10px] font-medium text-white backdrop-blur-sm hover:bg-black/90 transition cursor-pointer"
+                            >
                               <Layers className="h-2.5 w-2.5" />
-                              {gInfo.index}/{gInfo.total}
-                            </span>
+                              <span>
+                                {isGroupCollapsed
+                                  ? `组图 ${gInfo.total} 幅 · 展开`
+                                  : `${gInfo.index}/${gInfo.total} · 收起`}
+                              </span>
+                            </button>
                           )}
                           {/* Top-Left Checkbox (Always reachable on touch screens) */}
                           <label
@@ -1903,14 +1989,16 @@ export function AdminClient({
                               checked={checked}
                               onChange={() =>
                                 setSelectedIds((prev) =>
-                                  checked ? prev.filter((id) => id !== photo.id) : [...prev, photo.id]
+                                  checked
+                                    ? prev.filter((id) => !groupSibIds.includes(id))
+                                    : Array.from(new Set([...prev, ...groupSibIds]))
                                 )
                               }
                               className="cursor-pointer"
                             />
                           </label>
 
-                          {/* Top-Right Hide + Featured Controls */}
+                          {/* Top-Right Hide Control */}
                           <div className="absolute right-2 top-2 flex items-center gap-1">
                             <button
                               type="button"
@@ -1924,27 +2012,56 @@ export function AdminClient({
                             >
                               {photo.hidden ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
                             </button>
-                            <button
-                              type="button"
-                              onClick={(e) => toggleFeatured(photo, e)}
-                              title={photo.featured ? "取消首页精选" : "设为首页精选"}
-                              className={`flex h-6 w-6 items-center justify-center rounded-full backdrop-blur-sm transition cursor-pointer ${
-                                photo.featured
-                                  ? "bg-amber-400 text-zinc-950"
-                                  : "bg-black/45 text-white/75 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 hover:text-white"
-                              }`}
-                            >
-                              <Star className="h-3.5 w-3.5 fill-current" />
-                            </button>
                           </div>
                         </div>
 
                         <div className="p-2.5 space-y-1 text-xs">
                           <div className="flex items-center justify-between gap-1.5">
                             <span className="truncate font-medium text-[var(--fg)]">{displayTitle}</span>
-                            {photo.lat !== null && (
-                              <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400" title="含 GPS 坐标" />
-                            )}
+                            <div className="flex items-center gap-1 shrink-0">
+                              {canReorder && (
+                                <div
+                                  onClick={(e) => e.stopPropagation()}
+                                  className="inline-flex items-center gap-0.5 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition"
+                                >
+                                  <button
+                                    type="button"
+                                    disabled={!canMovePrev}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      if (gInfo && !isGroupCollapsed) {
+                                        reorderGroupFrame(gInfo.siblings, photo.id, -1);
+                                      } else {
+                                        movePhotoBy(photo.id, -1, e);
+                                      }
+                                    }}
+                                    title={gInfo && !isGroupCollapsed ? "组内前移一帧" : isGroupCollapsed ? "整组前移" : "前移一位"}
+                                    className="rounded border border-[var(--border)] p-0.5 text-[var(--fg-muted)] hover:text-[var(--fg)] disabled:opacity-25 cursor-pointer"
+                                  >
+                                    <ChevronLeft className="h-3 w-3" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={!canMoveNext}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      if (gInfo && !isGroupCollapsed) {
+                                        reorderGroupFrame(gInfo.siblings, photo.id, 1);
+                                      } else {
+                                        movePhotoBy(photo.id, 1, e);
+                                      }
+                                    }}
+                                    title={gInfo && !isGroupCollapsed ? "组内后移一帧" : isGroupCollapsed ? "整组后移" : "后移一位"}
+                                    className="rounded border border-[var(--border)] p-0.5 text-[var(--fg-muted)] hover:text-[var(--fg)] disabled:opacity-25 cursor-pointer"
+                                  >
+                                    <ChevronRight className="h-3 w-3" />
+                                  </button>
+                                </div>
+                              )}
+                              {photo.lat !== null && (
+                                <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400" title="含 GPS 坐标" />
+                              )}
+                            </div>
                           </div>
                           <div className="flex items-center justify-between text-[11px] text-[var(--fg-muted)]">
                             <span className="truncate">{photo.location ? photo.location.split(",")[0] : CAT_NAME[photo.category] || photo.category}</span>
@@ -1958,29 +2075,66 @@ export function AdminClient({
               ) : (
                 /* Compact Draggable List View */
                 <div className="surface-card divide-y divide-[var(--border)] rounded-xl overflow-hidden">
-                  {filteredPhotos.map((photo) => {
+                  {visibleLibraryPhotos.map((photo) => {
                     const realIdx = photoList.findIndex((p) => p.id === photo.id);
-                    const checked = selectedIds.includes(photo.id);
-                    const inspecting = editingPhoto?.id === photo.id;
                     const gInfo = adminGroupMap.get(photo.id);
-                    const displayTitle = formatNumberedTitle(photo.title, gInfo);
+                    const isGroupCollapsed = Boolean(gInfo && !expandedGroupSet.has(gInfo.groupId));
+                    const groupSibIds = gInfo ? gInfo.siblings.map((s) => s.id) : [photo.id];
+                    const checked = isGroupCollapsed
+                      ? groupSibIds.every((id) => selectedIds.includes(id))
+                      : selectedIds.includes(photo.id);
+                    const inspecting = isGroupCollapsed
+                      ? groupSibIds.includes(editingPhoto?.id ?? -1)
+                      : editingPhoto?.id === photo.id;
+                    const displayTitle = isGroupCollapsed
+                      ? photo.title
+                      : formatNumberedTitle(photo.title, gInfo);
+                    const canReorder = quickFilter === "all" && !searchQuery;
+                    const blockFirstIdx = gInfo
+                      ? photoList.findIndex((p) => p.id === gInfo.siblings[0].id)
+                      : realIdx;
+                    const blockLastIdx = gInfo
+                      ? photoList.findIndex((p) => p.id === gInfo.siblings[gInfo.siblings.length - 1].id)
+                      : realIdx;
+                    const canMovePrev =
+                      gInfo && !isGroupCollapsed ? gInfo.index > 1 : blockFirstIdx > 0;
+                    const canMoveNext =
+                      gInfo && !isGroupCollapsed
+                        ? gInfo.index < gInfo.total
+                        : blockLastIdx >= 0 && blockLastIdx < photoList.length - 1;
+
                     return (
                       <div
                         key={photo.id}
-                        draggable={quickFilter === "all" && !searchQuery}
+                        draggable={canReorder}
                         onDragStart={() => {
                           dragPhotoIdxRef.current = realIdx;
                         }}
-                        onDragOver={(e) => e.preventDefault()}
+                        onDragEnd={() => {
+                          dragPhotoIdxRef.current = null;
+                          setDragOverPhotoId(null);
+                        }}
+                        onDragOver={(e) => {
+                          e.preventDefault();
+                          if (dragOverPhotoId !== photo.id) setDragOverPhotoId(photo.id);
+                        }}
+                        onDragLeave={() => {
+                          if (dragOverPhotoId === photo.id) setDragOverPhotoId(null);
+                        }}
                         onDrop={() => {
                           const from = dragPhotoIdxRef.current;
                           dragPhotoIdxRef.current = null;
+                          setDragOverPhotoId(null);
                           if (from === null || from === realIdx || realIdx < 0) return;
                           handleLibraryPhotoDrop(from, realIdx);
                         }}
                         onClick={() => selectInspectorPhoto(photo)}
                         className={`flex items-center justify-between gap-3 px-4 py-2.5 text-xs cursor-pointer transition ${
-                          inspecting ? "bg-[var(--bg-subtle)]" : "hover:bg-[var(--bg-subtle)]/60"
+                          dragOverPhotoId === photo.id
+                            ? "bg-emerald-500/10 ring-1 ring-inset ring-emerald-400"
+                            : inspecting
+                            ? "bg-[var(--bg-subtle)]"
+                            : "hover:bg-[var(--bg-subtle)]/60"
                         }`}
                       >
                         <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
@@ -1991,7 +2145,9 @@ export function AdminClient({
                             onClick={(e) => e.stopPropagation()}
                             onChange={() =>
                               setSelectedIds((prev) =>
-                                checked ? prev.filter((id) => id !== photo.id) : [...prev, photo.id]
+                                checked
+                                  ? prev.filter((id) => !groupSibIds.includes(id))
+                                  : Array.from(new Set([...prev, ...groupSibIds]))
                               )
                             }
                           />
@@ -1999,8 +2155,9 @@ export function AdminClient({
                             src={optImg(photo.url, 128, 75)}
                             loading="lazy"
                             decoding="async"
+                            draggable={false}
                             alt=""
-                            className={`h-11 w-16 shrink-0 rounded-xs object-cover ${
+                            className={`h-11 w-16 shrink-0 rounded-xs object-cover select-none ${
                               photo.hidden ? "opacity-45 grayscale" : ""
                             }`}
                           />
@@ -2008,10 +2165,19 @@ export function AdminClient({
                             <div className="flex items-center gap-1.5">
                               <span className="truncate font-medium text-sm text-[var(--fg)]">{displayTitle}</span>
                               {gInfo && (
-                                <span className="shrink-0 inline-flex items-center gap-0.5 rounded bg-[var(--bg-subtle)] border border-[var(--border)] px-1.5 py-0.5 text-[10px] text-[var(--fg)]">
+                                <button
+                                  type="button"
+                                  onClick={(e) => toggleSingleGroupExpand(gInfo.groupId, e)}
+                                  title={isGroupCollapsed ? "展开该组全部照片" : "收起该组（整组整体移动）"}
+                                  className="shrink-0 inline-flex items-center gap-1 rounded bg-[var(--bg-subtle)] border border-[var(--border)] px-1.5 py-0.5 text-[10px] text-[var(--fg)] hover:border-[var(--fg)] cursor-pointer"
+                                >
                                   <Layers className="h-2.5 w-2.5" />
-                                  {gInfo.index}/{gInfo.total}
-                                </span>
+                                  <span>
+                                    {isGroupCollapsed
+                                      ? `组图 ${gInfo.total} 幅 · 展开`
+                                      : `${gInfo.index}/${gInfo.total} · 收起`}
+                                  </span>
+                                </button>
                               )}
                               {photo.hidden && (
                                 <span className="shrink-0 rounded bg-rose-500/15 px-1.5 py-0.5 text-[10px] text-rose-400">
@@ -2028,21 +2194,48 @@ export function AdminClient({
                         </div>
 
                         <div className="flex items-center gap-1.5 shrink-0">
-                          {quickFilter === "all" && !searchQuery && (
-                            <div className="flex sm:hidden items-center gap-1">
+                          {canReorder && (
+                            <div className="flex items-center gap-1">
+                              {(!gInfo || isGroupCollapsed) && (
+                                <button
+                                  type="button"
+                                  disabled={blockFirstIdx <= 0}
+                                  onClick={(e) => moveBlockToTop(photo.id, e)}
+                                  title={isGroupCollapsed ? "整组置顶" : "置顶"}
+                                  className="hidden sm:inline-flex rounded border border-[var(--border)] px-1.5 py-1 text-[10px] text-[var(--fg-muted)] hover:text-[var(--fg)] disabled:opacity-25 cursor-pointer"
+                                >
+                                  置顶
+                                </button>
+                              )}
                               <button
                                 type="button"
-                                disabled={realIdx <= 0}
-                                onClick={(e) => movePhotoBy(photo.id, -1, e)}
-                                className="rounded border border-[var(--border)] p-1 text-[var(--fg-muted)] disabled:opacity-25"
+                                disabled={!canMovePrev}
+                                onClick={(e) => {
+                                  if (gInfo && !isGroupCollapsed) {
+                                    e.stopPropagation();
+                                    reorderGroupFrame(gInfo.siblings, photo.id, -1);
+                                  } else {
+                                    movePhotoBy(photo.id, -1, e);
+                                  }
+                                }}
+                                title={gInfo && !isGroupCollapsed ? "组内上移一帧" : isGroupCollapsed ? "整组上移" : "上移"}
+                                className="rounded border border-[var(--border)] p-1 text-[var(--fg-muted)] hover:text-[var(--fg)] disabled:opacity-25 cursor-pointer"
                               >
                                 <ArrowUp className="h-3.5 w-3.5" />
                               </button>
                               <button
                                 type="button"
-                                disabled={realIdx >= photoList.length - 1}
-                                onClick={(e) => movePhotoBy(photo.id, 1, e)}
-                                className="rounded border border-[var(--border)] p-1 text-[var(--fg-muted)] disabled:opacity-25"
+                                disabled={!canMoveNext}
+                                onClick={(e) => {
+                                  if (gInfo && !isGroupCollapsed) {
+                                    e.stopPropagation();
+                                    reorderGroupFrame(gInfo.siblings, photo.id, 1);
+                                  } else {
+                                    movePhotoBy(photo.id, 1, e);
+                                  }
+                                }}
+                                title={gInfo && !isGroupCollapsed ? "组内下移一帧" : isGroupCollapsed ? "整组下移" : "下移"}
+                                className="rounded border border-[var(--border)] p-1 text-[var(--fg-muted)] hover:text-[var(--fg)] disabled:opacity-25 cursor-pointer"
                               >
                                 <ArrowDown className="h-3.5 w-3.5" />
                               </button>
@@ -2062,17 +2255,6 @@ export function AdminClient({
                             }`}
                           >
                             {photo.hidden ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={(e) => toggleFeatured(photo, e)}
-                            className={`rounded px-2 py-1 border cursor-pointer ${
-                              photo.featured
-                                ? "border-amber-400/50 bg-amber-400/15 text-amber-500"
-                                : "border-[var(--border)] text-[var(--fg-muted)]"
-                            }`}
-                          >
-                            ★<span className="hidden sm:inline"> 精选</span>
                           </button>
                         </div>
                       </div>
@@ -2153,7 +2335,7 @@ export function AdminClient({
                     </div>
                   </div>
 
-                  {/* Preview + Quick Featured / Hidden / Delete */}
+                  {/* Preview + Quick Hidden / Delete */}
                   <div className="flex items-center gap-3 shrink-0">
                     <img
                       src={optImg(editingPhoto.url, 256, 75)}
@@ -2168,18 +2350,6 @@ export function AdminClient({
                         画幅：{editingPhoto.width} × {editingPhoto.height}
                       </div>
                       <div className="flex flex-wrap items-center gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => setEditingPhoto({ ...editingPhoto, featured: !editingPhoto.featured })}
-                          className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 cursor-pointer ${
-                            editingPhoto.featured
-                              ? "border-amber-400/50 bg-amber-400/15 text-amber-500 font-medium"
-                              : "border-[var(--border)] text-[var(--fg-muted)]"
-                          }`}
-                        >
-                          <Star className="h-3 w-3 fill-current" />
-                          <span>{editingPhoto.featured ? "已精选" : "精选"}</span>
-                        </button>
                         <button
                           type="button"
                           onClick={() => setEditingPhoto({ ...editingPhoto, hidden: !editingPhoto.hidden })}
@@ -2208,6 +2378,12 @@ export function AdminClient({
                   {(() => {
                     const inspGroup = adminGroupMap.get(editingPhoto.id);
                     if (!inspGroup) return null;
+                    const groupFirstIdx = photoList.findIndex(
+                      (p) => p.id === inspGroup.siblings[0].id
+                    );
+                    const groupLastIdx = photoList.findIndex(
+                      (p) => p.id === inspGroup.siblings[inspGroup.siblings.length - 1].id
+                    );
                     return (
                       <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-subtle)] p-2.5 space-y-2.5">
                         <div className="flex flex-wrap items-center justify-between gap-1.5">
@@ -2216,6 +2392,23 @@ export function AdminClient({
                             组图 · 第 {inspGroup.index} / {inspGroup.total} 幅
                           </span>
                           <div className="flex items-center gap-1">
+                            {inspGroup.index > 1 && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const next = [...inspGroup.siblings];
+                                  const idx = next.findIndex((s) => s.id === editingPhoto.id);
+                                  if (idx <= 0) return;
+                                  const [picked] = next.splice(idx, 1);
+                                  next.unshift(picked);
+                                  applyGroupOrderOptimistic(next, editingPhoto.id);
+                                }}
+                                title="将当前帧设为组图第 1 幅封面"
+                                className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[11px] text-[var(--fg-muted)] hover:text-[var(--fg)] cursor-pointer"
+                              >
+                                设为首图
+                              </button>
+                            )}
                             <button
                               type="button"
                               disabled={inspGroup.index <= 1}
@@ -2248,8 +2441,26 @@ export function AdminClient({
                               <button
                                 key={sib.id}
                                 type="button"
+                                draggable
+                                onDragStart={() => {
+                                  dragInspFrameIdxRef.current = sIdx;
+                                }}
+                                onDragEnd={() => {
+                                  dragInspFrameIdxRef.current = null;
+                                }}
+                                onDragOver={(e) => e.preventDefault()}
+                                onDrop={() => {
+                                  const from = dragInspFrameIdxRef.current;
+                                  dragInspFrameIdxRef.current = null;
+                                  if (from === null || from === sIdx) return;
+                                  const next = [...inspGroup.siblings];
+                                  const [moved] = next.splice(from, 1);
+                                  next.splice(sIdx, 0, moved);
+                                  applyGroupOrderOptimistic(next, editingPhoto.id);
+                                }}
                                 onClick={() => selectInspectorPhoto(sib)}
-                                className={`relative h-11 w-16 shrink-0 overflow-hidden rounded-xs transition cursor-pointer ${
+                                title="点击切换本帧 · 直接拖拽缩略图可调整组内顺序"
+                                className={`relative h-11 w-16 shrink-0 overflow-hidden rounded-xs transition cursor-grab active:cursor-grabbing ${
                                   active
                                     ? "ring-2 ring-[var(--fg)] opacity-100"
                                     : "opacity-55 hover:opacity-95 ring-1 ring-[var(--border)]"
@@ -2259,8 +2470,9 @@ export function AdminClient({
                                   src={optImg(sib.url, 128, 75)}
                                   loading="lazy"
                                   decoding="async"
+                                  draggable={false}
                                   alt=""
-                                  className="h-full w-full object-cover"
+                                  className="h-full w-full object-cover select-none"
                                 />
                                 <span className="absolute left-1 bottom-0.5 rounded bg-black/70 px-1 text-[10px] font-semibold leading-tight text-white">
                                   {sIdx + 1}
@@ -2269,6 +2481,38 @@ export function AdminClient({
                             );
                           })}
                         </div>
+
+                        {quickFilter === "all" && !searchQuery && (
+                          <div className="flex items-center justify-between gap-2 pt-1.5 border-t border-[var(--border)] text-[11px]">
+                            <span className="text-[var(--fg-muted)]">整组位置</span>
+                            <div className="flex items-center gap-1">
+                              <button
+                                type="button"
+                                disabled={groupFirstIdx <= 0}
+                                onClick={() => moveBlockToTop(editingPhoto.id)}
+                                className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[var(--fg-muted)] hover:text-[var(--fg)] disabled:opacity-30 cursor-pointer"
+                              >
+                                ⇈ 整组置顶
+                              </button>
+                              <button
+                                type="button"
+                                disabled={groupFirstIdx <= 0}
+                                onClick={() => movePhotoBy(editingPhoto.id, -1)}
+                                className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[var(--fg-muted)] hover:text-[var(--fg)] disabled:opacity-30 cursor-pointer"
+                              >
+                                ← 整组前移
+                              </button>
+                              <button
+                                type="button"
+                                disabled={groupLastIdx >= photoList.length - 1}
+                                onClick={() => movePhotoBy(editingPhoto.id, 1)}
+                                className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[var(--fg-muted)] hover:text-[var(--fg)] disabled:opacity-30 cursor-pointer"
+                              >
+                                整组后移 →
+                              </button>
+                            </div>
+                          </div>
+                        )}
 
                         <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5 border-t border-[var(--border)]">
                           <label className="inline-flex items-center gap-1.5 text-[11px] text-[var(--fg)] cursor-pointer">
@@ -2681,13 +2925,6 @@ export function AdminClient({
                   </select>
                 )}
 
-                <button
-                  type="button"
-                  onClick={() => runBatchAction("featured", true)}
-                  className="rounded border border-[var(--border)] px-2.5 py-1 hover:bg-[var(--bg-subtle)] cursor-pointer"
-                >
-                  设为精选
-                </button>
                 <button
                   type="button"
                   onClick={() => runBatchAction("hidden", true)}

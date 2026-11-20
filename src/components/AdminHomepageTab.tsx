@@ -262,7 +262,7 @@ export function AdminHomepageTab({
                 第一屏 · 首页精选大图轮播 ({activeFeaturedIds.length})
               </h3>
               <span className="rounded-full border border-[var(--border)] bg-[var(--bg-subtle)] px-2 py-0.5 text-[10px] text-[var(--fg-muted)]">
-                {featuredIds === null ? "自动跟随 ★ 精选标记" : "自定义列表与顺序"}
+                {featuredIds === null ? "默认推荐（前 8 幅横图）" : "自定义列表与顺序"}
               </span>
             </div>
             <p className="text-[var(--fg-muted)]">
@@ -277,7 +277,7 @@ export function AdminHomepageTab({
                 onClick={() => mark(setFeaturedIds, null)}
                 className="inline-flex items-center gap-1 rounded-md border border-[var(--border)] px-2.5 py-1.5 text-[var(--fg-muted)] hover:text-[var(--fg)] cursor-pointer"
               >
-                <RotateCcw className="h-3.5 w-3.5" /> 恢复自动精选
+                <RotateCcw className="h-3.5 w-3.5" /> 恢复默认推荐
               </button>
             )}
             <button

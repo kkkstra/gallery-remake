@@ -296,6 +296,14 @@ export async function PATCH(req: Request) {
           .where(eq(photos.id, pid))
       )
     );
+    const refreshedAll = await getAllPhotos({ includeHidden: true });
+    await Promise.all(
+      refreshedAll.map((p, i) =>
+        p.sortOrder !== i + 1
+          ? db.update(photos).set({ sortOrder: i + 1 }).where(eq(photos.id, p.id))
+          : Promise.resolve()
+      )
+    );
     invalidateGalleryCache();
     return NextResponse.json({ ok: true, count: ids.length });
   }

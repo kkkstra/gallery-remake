@@ -58,6 +58,10 @@ export function resolveHomepageSections(
   const fullGroupMap = buildGroupMap(allPhotos);
 
   // 1. Hero Featured Carousel
+  const defaultHeroPool = () => {
+    const wide = allPhotos.filter((p) => (p.width || 1600) >= (p.height || 1068)).slice(0, 8);
+    return wide.length >= 2 ? wide : allPhotos.slice(0, 8);
+  };
   const customFeaturedIds = parseOptionalIdList(settings.homeFeaturedIds);
   let heroSlides: Photo[];
   let isCustomFeatured = false;
@@ -69,13 +73,10 @@ export function resolveHomepageSections(
       heroSlides = picked;
       isCustomFeatured = true;
     } else {
-      const def = allPhotos.filter((p) => p.featured);
-      heroSlides = def.length > 0 ? def : allPhotos.slice(0, 8);
+      heroSlides = defaultHeroPool();
     }
   } else {
-    const def = allPhotos.filter((p) => p.featured);
-    const wide = def.filter((p) => (p.width || 1600) >= (p.height || 1068));
-    heroSlides = wide.length >= 2 ? wide : def.length > 0 ? def : allPhotos.slice(0, 8);
+    heroSlides = defaultHeroPool();
   }
 
   // 2. Homepage Series / Collections
